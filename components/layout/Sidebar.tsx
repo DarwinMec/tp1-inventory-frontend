@@ -1,129 +1,69 @@
-// src/components/layout/Sidebar.tsx
-"use client";
+'use client';
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
-  Boxes,
-  UtensilsCrossed,
+  Package,
+  Utensils,
   Truck,
-  LineChart,
   ShoppingCart,
+  LineChart,
   FileText,
   Users,
-} from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
-import type { UserRole } from "@/lib/types";
+} from 'lucide-react';
 
-type MenuItem = {
-  href: string;
-  label: string;
-  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
-  roles: UserRole[]; // "ADMIN" | "MANAGER" | "EMPLOYEE"
-};
-
-const menuItems: MenuItem[] = [
-  {
-    href: "/dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-    roles: ["ADMIN", "MANAGER", "EMPLOYEE"],
-  },
-  {
-    href: "/insumos",
-    label: "Insumos",
-    icon: Boxes,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/platillos",
-    label: "Platillos",
-    icon: UtensilsCrossed,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/proveedores",
-    label: "Proveedores",
-    icon: Truck,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/ventas",
-    label: "Ventas",
-    icon: ShoppingCart,
-    roles: ["ADMIN", "MANAGER", "EMPLOYEE"],
-  },
-  {
-    href: "/predicciones",
-    label: "Predicciones",
-    icon: LineChart,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/ordenes",
-    label: "Órdenes",
-    icon: FileText,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/reportes",
-    label: "Reportes",
-    icon: FileText,
-    roles: ["ADMIN", "MANAGER"],
-  },
-  {
-    href: "/usuarios",
-    label: "Usuarios",
-    icon: Users,
-    roles: ["ADMIN"],
-  },
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/insumos', label: 'Insumos', icon: Package },
+  { href: '/platillos', label: 'Platillos', icon: Utensils },
+  { href: '/proveedores', label: 'Proveedores', icon: Truck },
+  { href: '/ventas', label: 'Ventas', icon: ShoppingCart },
+  { href: '/predicciones', label: 'Predicciones', icon: LineChart },
+  { href: '/ordenes', label: 'Órdenes', icon: FileText },
+  { href: '/usuarios', label: 'Usuarios', icon: Users },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user } = useAuth();
-
-  if (!user) return null;
 
   return (
-    <aside className="hidden h-screen w-64 border-r border-slate-800 bg-slate-900/80 px-4 py-6 md:block">
-      <div className="mb-8">
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <span className="rounded-lg bg-blue-600 px-2 py-1 text-xs font-semibold">
-            GestRest
-          </span>
-          <span className="text-lg font-bold">
-            AI <span className="text-emerald-400">Chiclayo</span>
-          </span>
-        </Link>
-        <p className="mt-1 text-xs text-slate-500">
-          Inventarios &amp; Predicción de demanda
-        </p>
+    <aside className="hidden bg-slate-950 text-slate-100 md:flex md:w-64 md:flex-col">
+      <div className="flex h-14 items-center gap-2 border-b border-slate-800 px-4">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-xs font-bold">
+          AI
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold">TP1 Inventory</p>
+          <p className="text-[11px] text-slate-400">Gestión & Predicción</p>
+        </div>
       </div>
 
-      <nav className="space-y-1 text-sm">
-        {menuItems
-          .filter((item) => item.roles.includes(user.role))
-          .map((item) => {
-            const Icon = item.icon;
-            const active = pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 transition ${
-                  active
-                    ? "bg-blue-600/20 text-blue-300"
-                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+      <nav className="flex-1 space-y-1 px-2 py-3 text-sm">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const active = pathname === item.href || pathname.startsWith(item.href + '/');
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-2 rounded-lg px-2 py-2 transition ${
+                active
+                  ? 'bg-slate-800 text-slate-50'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-50'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
       </nav>
+
+      <div className="border-t border-slate-800 px-3 py-3 text-[11px] text-slate-500">
+        <p>Sistema de tesis · Chiclayo</p>
+      </div>
     </aside>
   );
 }
