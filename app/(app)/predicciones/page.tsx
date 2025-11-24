@@ -62,7 +62,7 @@ type MLModelInfoDTO = {
   version?: string;
   mae?: number;
   rmse?: number;
-  accuracy?: number;
+  r2?: number;
   trainedAt?: string;
   createdAt?: string;
 };
@@ -596,10 +596,9 @@ export default function PrediccionesPage() {
                       {modelInfo.rmse != null ? modelInfo.rmse.toFixed(2) : "—"}
                     </p>
                     <p>
-                      <span className="font-medium">Accuracy:</span>{" "}
-                      {modelInfo.accuracy != null
-                        ? `${(modelInfo.accuracy * 100).toFixed(1)}%`
-                        : "—"}
+                      <span className="font-medium">R2:</span>{" "}
+                      {modelInfo.r2 != null
+                        ? `${(modelInfo.r2 * 100).toFixed(1)}%`: "—"}
                     </p>
                     <p>
                       <span className="font-medium">Entrenado:</span>{" "}

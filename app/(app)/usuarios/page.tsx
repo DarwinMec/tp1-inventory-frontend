@@ -346,7 +346,7 @@ export default function UsuariosPage() {
             <span>Gestión de usuarios y roles</span>
           </div>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-            Usuarios del sistema GestRest AI
+            Usuarios del sistema Inventory ML
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
             Administra las cuentas de acceso al sistema, asigna roles y controla

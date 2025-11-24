@@ -5,7 +5,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
-  title: "GestRest Machine Learning - Sistema de Gestión de Inventarios",
+  title: "Machine Learning - Sistema de Gestión de Inventarios",
   description:
     "Sistema inteligente de gestión de inventarios y predicción de demanda para restaurantes en Chiclayo, Perú.",
 };
