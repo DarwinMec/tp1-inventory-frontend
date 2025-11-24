@@ -9,6 +9,7 @@ import {
   Edit,
   Package,
   X,
+  Sparkles,
 } from "lucide-react";
 import { apiFetch } from "@/lib/apiClient";
 
@@ -371,8 +372,8 @@ export default function PlatillosPage() {
       {/* ENCABEZADO */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-            <Utensils className="h-3 w-3" />
+          <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+            <Sparkles className="h-3 w-3" />
             <span>Módulo de platillos</span>
           </div>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">

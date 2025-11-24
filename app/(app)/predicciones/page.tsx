@@ -371,7 +371,7 @@ export default function PrediccionesPage() {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
             <Sparkles className="h-3 w-3" />
-            <span>GestRest AI · Módulo de predicciones</span>
+            <span>Módulo de predicciones</span>
           </div>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
             Predicción de demanda y abastecimiento
