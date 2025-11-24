@@ -41,7 +41,7 @@ export default function LoginPage() {
     if (!ok) {
       toast.error("Credenciales incorrectas. Revisa tu usuario y contraseña.");
     } else {
-      toast.success("Bienvenido a GestRest AI");
+      toast.success("Bienvenido a Inventory ML");
     }
   };
 
@@ -50,7 +50,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl">
         <div className="mb-6 text-center">
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-600/20 px-3 py-1 text-xs font-semibold text-blue-300">
-            GestRest AI · Chiclayo
+            Inventory ML · Chiclayo
           </div>
           <h1 className="mt-3 text-2xl font-bold">Iniciar sesión</h1>
           <p className="mt-1 text-xs text-slate-400">
