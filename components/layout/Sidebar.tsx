@@ -31,7 +31,7 @@ export function Sidebar() {
     <aside className="hidden bg-slate-950 text-slate-100 md:flex md:w-64 md:flex-col">
       <div className="flex h-14 items-center gap-2 border-b border-slate-800 px-4">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-xs font-bold">
-          AI
+          TP
         </div>
         <div className="leading-tight">
           <p className="text-sm font-semibold">TP1 Inventory</p>
