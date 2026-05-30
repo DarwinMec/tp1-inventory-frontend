@@ -1,11 +1,16 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   LineChart as LineChartIcon,
   Sparkles,
   History,
   AlertCircle,
+  BrainCircuit,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+  Server,
 } from "lucide-react";
 import {
   LineChart,
@@ -17,121 +22,164 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { apiFetch } from "@/lib/apiClient";
-
-// === Tipos alineados al backend ===
-
-// DishIngredientDTO.java
-type DishIngredientDTO = {
-  id: string;
-  productId: string;
-  productName: string;
-  quantityNeeded: number;
-  unit: string;
-  costPerUnit: number;
-};
-
-// DTO de platillo (DishDTO.java)
-type DishDTO = {
-  id: string;
-  name: string;
-  description?: string | null;
-  category?: string | null;
-  price?: number | null;
-  isActive?: boolean | null;
-  preparationTime?: number | null;
-
-  // ingredientes del plato
-  ingredients?: DishIngredientDTO[];
-};
-
-// MLServicePredictionDTO.java (por platillo)
-type MLServicePredictionDTO = {
-  dishId: string;
-  dishName: string;
-  weekStart: string; // "2025-01-27"
-  predictedDemand: number;
-  confidence: string; // en tu backend actual viene "0.80", pero puede ser etiqueta
-};
-
-// MLModelInfoDTO.java
-type MLModelInfoDTO = {
-  modelId?: string;
-  modelName?: string;
-  modelType?: string;
-  version?: string;
-  mae?: number;
-  rmse?: number;
-  r2?: number;
-  trainedAt?: string;
-  createdAt?: string;
-};
-
-// MLPredictionResponseDTO.java (por platillo)
-type MLPredictionResponseDTO = {
-  success: boolean;
-  predictions: MLServicePredictionDTO[];
-  totalPredictions: number;
-  modelId?: string;
-  message?: string;
-};
-
-// === NUEVOS tipos para la predicción semanal global ===
-
-type WeeklyGlobalDishPredictionDTO = {
-  dishId: string;
-  dishName: string;
-  weekStart: string;
-  predictedDemand: number;
-  confidence: string;
-};
-
-type WeeklyGlobalSupplyItemDTO = {
-  productId: string;
-  productName: string;
-  unitMeasure: string;
-  totalRequired: number;
-  currentStock: number;
-  availableStock: number;
-  quantityToBuy: number;
-};
-
-type WeeklyGlobalPredictionResponseDTO = {
-  weekStart: string;
-  dishes: WeeklyGlobalDishPredictionDTO[];
-  supplies: WeeklyGlobalSupplyItemDTO[];
-};
+import { useAuthContext } from "@/context/AuthContext";
+import type {
+  DishDTO,
+  DishIngredientDTO,
+  MLModelInfoDTO,
+  MLPredictionResponseDTO,
+  MLServiceHealthDTO,
+  MLServicePredictionDTO,
+  MLTrainResponseDTO,
+  WeeklyGlobalPredictionResponseDTO,
+} from "@/lib/backend-types";
+import {
+  generatePredictions,
+  getActiveMLModel,
+  getDishById,
+  getDishes,
+  getMLHealth,
+  getWeeklySupplyPlan,
+  trainMLModel,
+} from "@/lib/services";
 
 type ViewMode = "byDish" | "weekly";
 
+function toNumber(value?: number | string | null) {
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function getIngredientUnit(ingredient: DishIngredientDTO) {
+  return ingredient.unit ?? ingredient.unitMeasure ?? "";
+}
+
+function parseISODateAsLocal(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+function formatDateLabel(value: string) {
+  return parseISODateAsLocal(value).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+  });
+}
+
+function formatDateTooltip(value: string) {
+  return parseISODateAsLocal(value).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatWeekDate(value?: string | null) {
+  if (!value) return "—";
+
+  return parseISODateAsLocal(value).toLocaleDateString("es-PE", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export default function PrediccionesPage() {
-  // ==== Estado general ====
+  const { user } = useAuthContext();
+
   const [viewMode, setViewMode] = useState<ViewMode>("byDish");
 
-  // ==== Estado para modo "por platillo" ====
+  const [mlHealth, setMlHealth] = useState<MLServiceHealthDTO | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+
+  const [trainingFastMode, setTrainingFastMode] = useState(true);
+  const [training, setTraining] = useState(false);
+  const [trainingResult, setTrainingResult] =
+    useState<MLTrainResponseDTO | null>(null);
+  const [trainingMessage, setTrainingMessage] = useState<string | null>(null);
+  const [trainingError, setTrainingError] = useState<string | null>(null);
+
   const [dishes, setDishes] = useState<DishDTO[]>([]);
   const [selectedDishId, setSelectedDishId] = useState<string>("");
-  const [horizonWeeks, setHorizonWeeks] = useState<number>(4); // semanas
-  const [predictions, setPredictions] = useState<MLServicePredictionDTO[] | null>(
-    null
-  );
+  const [horizonWeeks, setHorizonWeeks] = useState<number>(4);
+  const [predictions, setPredictions] = useState<
+    MLServicePredictionDTO[] | null
+  >(null);
   const [modelInfo, setModelInfo] = useState<MLModelInfoDTO | null>(null);
 
   const [loadingDishes, setLoadingDishes] = useState(false);
   const [loadingPrediction, setLoadingPrediction] = useState(false);
   const [loadingModelInfo, setLoadingModelInfo] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dishIngredients, setDishIngredients] = useState<DishIngredientDTO[] | null>(null);
+
+  const [dishIngredients, setDishIngredients] = useState<
+    DishIngredientDTO[] | null
+  >(null);
   const [loadingIngredients, setLoadingIngredients] = useState(false);
 
-  // ==== Estado para modo "semanal global" ====
   const [weeklyPlan, setWeeklyPlan] =
     useState<WeeklyGlobalPredictionResponseDTO | null>(null);
   const [weeklyHorizon, setWeeklyHorizon] = useState<number>(1);
   const [loadingWeeklyPlan, setLoadingWeeklyPlan] = useState(false);
   const [weeklyError, setWeeklyError] = useState<string | null>(null);
 
-  // ==== Cargar ingredientes del platillo seleccionado (modo por platillo) ====
+  const loadActiveModelInfo = useCallback(async () => {
+    try {
+      setLoadingModelInfo(true);
+
+      const info = await getActiveMLModel();
+      setModelInfo(info);
+    } catch (e) {
+      console.error("Error cargando info del modelo ML", e);
+      setModelInfo(null);
+    } finally {
+      setLoadingModelInfo(false);
+    }
+  }, []);
+
+  const loadMLHealth = useCallback(async () => {
+    try {
+      setLoadingHealth(true);
+
+      const health = await getMLHealth();
+      setMlHealth(health);
+    } catch (e) {
+      console.error("Error verificando servicio ML", e);
+      setMlHealth({
+        status: "unavailable",
+        message: "No se pudo conectar con el servicio ML.",
+      });
+    } finally {
+      setLoadingHealth(false);
+    }
+  }, []);
+
+  const loadDishes = useCallback(async () => {
+    try {
+      setLoadingDishes(true);
+      setError(null);
+
+      const data = await getDishes();
+      setDishes((data ?? []).filter((dish) => dish.isActive !== false));
+    } catch (e: any) {
+      console.error("Error cargando platillos", e);
+      setError(
+        e?.message ??
+          "No se pudieron cargar los platillos. Verifica permisos y el backend."
+      );
+    } finally {
+      setLoadingDishes(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDishes();
+    loadActiveModelInfo();
+    loadMLHealth();
+  }, [loadDishes, loadActiveModelInfo, loadMLHealth]);
+
   useEffect(() => {
     const loadIngredients = async () => {
       if (!selectedDishId) {
@@ -142,8 +190,7 @@ export default function PrediccionesPage() {
       try {
         setLoadingIngredients(true);
 
-        // GET /api/dishes/{id} → DishDTO con ingredients
-        const dish = await apiFetch<DishDTO>(`/dishes/${selectedDishId}`);
+        const dish = await getDishById(selectedDishId);
         setDishIngredients(dish.ingredients ?? []);
       } catch (e) {
         console.error("Error cargando ingredientes del platillo", e);
@@ -156,50 +203,52 @@ export default function PrediccionesPage() {
     loadIngredients();
   }, [selectedDishId]);
 
-  // 1) Cargar lista de platillos
-  useEffect(() => {
-    const loadDishes = async () => {
-      try {
-        setLoadingDishes(true);
-        setError(null);
+  const handleTrainModel = async () => {
+    const confirmed = window.confirm(
+      trainingFastMode
+        ? "Se entrenará un nuevo modelo en modo rápido. ¿Deseas continuar?"
+        : "Se entrenará un nuevo modelo completo. Puede tardar varios minutos. ¿Deseas continuar?"
+    );
 
-        // BACKEND: DishController → @GetMapping("/api/dishes")
-        const data = await apiFetch<DishDTO[]>("/dishes");
-        setDishes(data);
-      } catch (e: any) {
-        console.error("Error cargando platillos", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los platillos. Verifica permisos y el backend."
+    if (!confirmed) return;
+
+    try {
+      setTraining(true);
+      setTrainingError(null);
+      setTrainingMessage(null);
+      setTrainingResult(null);
+
+      const response = await trainMLModel({
+        fastMode: trainingFastMode,
+        registerInDb: true,
+        createdBy: user?.username ?? "admin",
+      });
+
+      if (!response.success) {
+        setTrainingError(
+          response.message ?? "No se pudo entrenar el modelo correctamente."
         );
-      } finally {
-        setLoadingDishes(false);
+        return;
       }
-    };
 
-    loadDishes();
-  }, []);
+      setTrainingResult(response);
+      setTrainingMessage(
+        response.message ?? "Modelo entrenado y registrado correctamente."
+      );
 
-  // 2) Cargar info del modelo activo (métricas)
-  useEffect(() => {
-    const loadModelInfo = async () => {
-      try {
-        setLoadingModelInfo(true);
+      await loadActiveModelInfo();
+      await loadMLHealth();
+    } catch (e: any) {
+      console.error("Error entrenando modelo ML", e);
+      setTrainingError(
+        e?.message ??
+          "Ocurrió un error durante el entrenamiento del modelo ML."
+      );
+    } finally {
+      setTraining(false);
+    }
+  };
 
-        // BACKEND: MLServiceController → GET /api/ml-service/model/active
-        const info = await apiFetch<MLModelInfoDTO>("/ml-service/model/active");
-        setModelInfo(info);
-      } catch (e: any) {
-        console.error("Error cargando info del modelo ML", e);
-      } finally {
-        setLoadingModelInfo(false);
-      }
-    };
-
-    loadModelInfo();
-  }, []);
-
-  // 3) Pedir predicciones semanales para un platillo usando POST /ml-service/predict
   const handleRequestPrediction = async (e: FormEvent) => {
     e.preventDefault();
 
@@ -213,15 +262,11 @@ export default function PrediccionesPage() {
       setError(null);
       setPredictions(null);
 
-      const body = {
+      const resp: MLPredictionResponseDTO = await generatePredictions({
         dishId: selectedDishId,
         weeksAhead: horizonWeeks,
         saveToDb: true,
-      };
-
-      const resp = await apiFetch<MLPredictionResponseDTO>("/ml-service/predict", {
-        method: "POST",
-        body: JSON.stringify(body),
+        createdBy: user?.username ?? "admin",
       });
 
       if (!resp.success) {
@@ -242,7 +287,6 @@ export default function PrediccionesPage() {
     }
   };
 
-  // 4) Pedir plan semanal global usando GET /ml-service/weekly-supply
   const handleRequestWeeklyPlan = async (e: FormEvent) => {
     e.preventDefault();
 
@@ -251,9 +295,7 @@ export default function PrediccionesPage() {
       setWeeklyError(null);
       setWeeklyPlan(null);
 
-      const resp = await apiFetch<WeeklyGlobalPredictionResponseDTO>(
-        `/ml-service/weekly-supply?weeksAhead=${weeklyHorizon}`
-      );
+      const resp = await getWeeklySupplyPlan(weeklyHorizon);
 
       setWeeklyPlan(resp);
     } catch (e: any) {
@@ -267,31 +309,23 @@ export default function PrediccionesPage() {
     }
   };
 
-  const parseISODateAsLocal = (value: string) => {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, (month || 1) - 1, day || 1);
-  };
-
-  // Datos para la gráfica por platillo
   const chartData =
     predictions?.map((p) => ({
-      date: p.weekStart,
-      Predicción: p.predictedDemand,
+      date: p.weekStart ?? "",
+      Predicción: toNumber(p.predictedDemand),
     })) ?? [];
 
   const selectedDish = dishes.find((d) => d.id === selectedDishId) || null;
 
-  // Demanda total (por platillo)
   const totalPredicted = useMemo(
     () =>
       predictions?.reduce(
-        (acc, p) => acc + (p.predictedDemand ?? 0),
+        (acc, p) => acc + toNumber(p.predictedDemand),
         0
       ) ?? 0,
     [predictions]
   );
 
-  // Insumos totales para un platillo (modo por platillo)
   const ingredientTotals = useMemo(() => {
     if (
       !predictions ||
@@ -306,28 +340,30 @@ export default function PrediccionesPage() {
 
     return dishIngredients.map((ing) => ({
       productId: ing.productId,
-      productName: ing.productName,
-      unit: ing.unit,
-      perDish: ing.quantityNeeded,
-      totalQuantity: totalDemandUnits * ing.quantityNeeded,
+      productName: ing.productName ?? "Insumo",
+      unit: getIngredientUnit(ing),
+      perDish: toNumber(ing.quantityNeeded),
+      totalQuantity: totalDemandUnits * toNumber(ing.quantityNeeded),
     }));
   }, [predictions, dishIngredients, totalPredicted]);
 
   const dominantConfidence = useMemo(() => {
     if (!predictions || predictions.length === 0) return null;
+
     const counts: Record<string, number> = {};
+
     for (const p of predictions) {
       const key = (p.confidence || "desconocida").toLowerCase();
       counts[key] = (counts[key] || 0) + 1;
     }
+
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   }, [predictions]);
 
-  // Agregados para el plan semanal global
   const totalWeeklyDemand = useMemo(
     () =>
       weeklyPlan?.dishes?.reduce(
-        (acc, d) => acc + (d.predictedDemand ?? 0),
+        (acc, d) => acc + toNumber(d.predictedDemand),
         0
       ) ?? 0,
     [weeklyPlan]
@@ -335,47 +371,24 @@ export default function PrediccionesPage() {
 
   const suppliesNeedingPurchase = useMemo(
     () =>
-      weeklyPlan?.supplies?.filter((s) => (s.quantityToBuy ?? 0) > 0).length ??
-      0,
+      weeklyPlan?.supplies?.filter((s) => toNumber(s.quantityToBuy) > 0)
+        .length ?? 0,
     [weeklyPlan]
   );
 
-  const formatDateLabel = (value: string) =>
-    parseISODateAsLocal(value).toLocaleDateString("es-PE", {
-      day: "2-digit",
-      month: "short",
-    });
-
-  const formatDateTooltip = (value: string) =>
-    parseISODateAsLocal(value).toLocaleDateString("es-PE", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-
-  const formatWeekDate = (value?: string) => {
-    if (!value) return "—";
-    return parseISODateAsLocal(value).toLocaleDateString("es-PE", {
-      weekday: "short",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-  };
-
-
   return (
     <section className="space-y-6">
-      {/* ENCABEZADO */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
             <Sparkles className="h-3 w-3" />
             <span>Módulo de predicciones</span>
           </div>
+
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
             Predicción de demanda y abastecimiento
           </h1>
+
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
             Usa el modelo de Machine Learning para estimar la demanda de
             platillos por semana y convertirla en un plan de abastecimiento de
@@ -399,7 +412,6 @@ export default function PrediccionesPage() {
         </div>
       </header>
 
-      {/* SWITCH DE VISTA */}
       <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1 text-xs">
         <button
           type="button"
@@ -412,6 +424,7 @@ export default function PrediccionesPage() {
         >
           Por platillo
         </button>
+
         <button
           type="button"
           onClick={() => setViewMode("weekly")}
@@ -425,12 +438,192 @@ export default function PrediccionesPage() {
         </button>
       </div>
 
-      {/* === VISTA: POR PLATILLO === */}
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
+                <BrainCircuit className="h-5 w-5 text-blue-600" />
+              </div>
+
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Gestión del modelo predictivo
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Entrena o reentrena el modelo XGBoost usando los datos
+                  históricos registrados en ventas.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                loadActiveModelInfo();
+                loadMLHealth();
+              }}
+              disabled={loadingModelInfo || loadingHealth}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${
+                  loadingModelInfo || loadingHealth ? "animate-spin" : ""
+                }`}
+              />
+              Actualizar
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-slate-50 p-3">
+              <p className="text-[11px] font-medium text-slate-500">
+                Modelo activo
+              </p>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+                {modelInfo?.modelName ?? "—"}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                {modelInfo?.modelType ?? "Sin tipo registrado"}
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-3">
+              <p className="text-[11px] font-medium text-slate-500">Versión</p>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+                {modelInfo?.version ?? "—"}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Último modelo registrado.
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-3">
+              <p className="text-[11px] font-medium text-slate-500">
+                R² actual
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {modelInfo?.r2 != null
+                  ? `${(modelInfo.r2 * 100).toFixed(1)}%`
+                  : "—"}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Desempeño registrado.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={trainingFastMode}
+                onChange={(e) => setTrainingFastMode(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+                disabled={training}
+              />
+              Entrenamiento rápido
+            </label>
+
+            <button
+              type="button"
+              onClick={handleTrainModel}
+              disabled={training}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+            >
+              {training ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BrainCircuit className="h-4 w-4" />
+              )}
+              {training ? "Entrenando modelo..." : "Entrenar modelo"}
+            </button>
+          </div>
+
+          {(trainingMessage || trainingError) && (
+            <div
+              className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                trainingError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {trainingError ? (
+                <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+              ) : (
+                <CheckCircle2 className="mt-[2px] h-3.5 w-3.5" />
+              )}
+              <p>{trainingError ?? trainingMessage}</p>
+            </div>
+          )}
+
+          {trainingResult && (
+            <div className="mt-3 rounded-xl border border-slate-100 bg-white p-3 text-[11px] text-slate-500">
+              <p>
+                <span className="font-medium text-slate-700">Modelo ID:</span>{" "}
+                {trainingResult.modelId ?? "—"}
+              </p>
+              <p>
+                <span className="font-medium text-slate-700">Versión:</span>{" "}
+                {trainingResult.version ?? "—"}
+              </p>
+              <p>
+                <span className="font-medium text-slate-700">Historial:</span>{" "}
+                {trainingResult.trainingHistoryId ?? "—"}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-start gap-3">
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                mlHealth?.status === "ok" || mlHealth?.status === "healthy"
+                  ? "bg-emerald-50 text-emerald-600"
+                  : "bg-orange-50 text-orange-600"
+              }`}
+            >
+              <Server className="h-5 w-5" />
+            </div>
+
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Estado del servicio ML
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Verificación de comunicación entre Spring Boot y FastAPI.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2 text-xs text-slate-600">
+            <p>
+              <span className="font-medium text-slate-800">Estado:</span>{" "}
+              {loadingHealth ? "Verificando..." : mlHealth?.status ?? "—"}
+            </p>
+
+            <p>
+              <span className="font-medium text-slate-800">Servicio:</span>{" "}
+              {mlHealth?.service ?? "GestRest AI ML Service"}
+            </p>
+
+            <p>
+              <span className="font-medium text-slate-800">Versión:</span>{" "}
+              {mlHealth?.version ?? "—"}
+            </p>
+
+            <p className="rounded-xl bg-slate-50 p-3 text-[11px] text-slate-500">
+              {mlHealth?.message ??
+                "El backend consultará /api/ml-service/health para verificar si FastAPI está disponible."}
+            </p>
+          </div>
+        </div>
+      </div>
+
       {viewMode === "byDish" && (
         <>
-          {/* FORM + TARJETAS RESUMEN */}
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-            {/* FORMULARIO */}
             <form
               onSubmit={handleRequestPrediction}
               className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
@@ -440,7 +633,6 @@ export default function PrediccionesPage() {
                 Predicción semanal por platillo
               </h2>
 
-              {/* SELECT PLATILLO */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Platillo
@@ -469,7 +661,6 @@ export default function PrediccionesPage() {
                 </p>
               </div>
 
-              {/* HORIZONTE EN SEMANAS */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Horizonte de predicción (semanas)
@@ -493,7 +684,6 @@ export default function PrediccionesPage() {
                 </p>
               </div>
 
-              {/* BOTÓN */}
               <button
                 type="submit"
                 disabled={!selectedDishId || loadingPrediction || loadingDishes}
@@ -512,7 +702,6 @@ export default function PrediccionesPage() {
                 )}
               </button>
 
-              {/* ERROR */}
               {error && (
                 <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
@@ -521,13 +710,11 @@ export default function PrediccionesPage() {
               )}
             </form>
 
-            {/* RESUMEN / MÉTRICAS */}
             <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h2 className="text-sm font-semibold text-slate-900">
                 Resumen de predicción y modelo
               </h2>
 
-              {/* AGREGADOS DE LA PREDICCIÓN */}
               {predictions && predictions.length > 0 ? (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="rounded-xl bg-slate-50 p-3">
@@ -541,6 +728,7 @@ export default function PrediccionesPage() {
                       Suma de la demanda prevista en el horizonte.
                     </p>
                   </div>
+
                   <div className="rounded-xl bg-slate-50 p-3">
                     <p className="text-[11px] font-medium text-slate-500">
                       Semanas pronosticadas
@@ -552,6 +740,7 @@ export default function PrediccionesPage() {
                       Cada punto representa el inicio de semana.
                     </p>
                   </div>
+
                   <div className="rounded-xl bg-slate-50 p-3">
                     <p className="text-[11px] font-medium text-slate-500">
                       Confianza dominante
@@ -571,7 +760,6 @@ export default function PrediccionesPage() {
                 </p>
               )}
 
-              {/* INFO DEL MODELO ACTIVO */}
               <div className="mt-3 border-t border-slate-100 pt-3">
                 <p className="text-xs font-semibold text-slate-700">
                   Modelo de Machine Learning activo
@@ -598,7 +786,8 @@ export default function PrediccionesPage() {
                     <p>
                       <span className="font-medium">R2:</span>{" "}
                       {modelInfo.r2 != null
-                        ? `${(modelInfo.r2 * 100).toFixed(1)}%`: "—"}
+                        ? `${(modelInfo.r2 * 100).toFixed(1)}%`
+                        : "—"}
                     </p>
                     <p>
                       <span className="font-medium">Entrenado:</span>{" "}
@@ -630,7 +819,6 @@ export default function PrediccionesPage() {
                 </div>
               )}
 
-              {/* INSUMOS REQUERIDOS PARA ESTE PLATILLO */}
               <div className="mt-3 border-t border-slate-100 pt-3">
                 <p className="text-xs font-semibold text-slate-700">
                   Insumos requeridos para abastecer la demanda
@@ -705,7 +893,6 @@ export default function PrediccionesPage() {
             </div>
           </div>
 
-          {/* GRÁFICA POR PLATILLO */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="mb-3 flex items-center justify-between">
               <div>
@@ -745,7 +932,7 @@ export default function PrediccionesPage() {
                     <YAxis tick={{ fontSize: 10 }} />
                     <Tooltip
                       labelFormatter={formatDateTooltip}
-                      formatter={(value: any) => [
+                      formatter={(value) => [
                         `${Number(value).toFixed(0)} uds`,
                         "Predicción",
                       ]}
@@ -767,12 +954,9 @@ export default function PrediccionesPage() {
         </>
       )}
 
-      {/* === VISTA: SEMANA COMPLETA (GLOBAL) === */}
       {viewMode === "weekly" && (
         <>
-          {/* FORM + RESUMEN GLOBAL */}
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-            {/* FORMULARIO GLOBAL */}
             <form
               onSubmit={handleRequestWeeklyPlan}
               className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
@@ -783,12 +967,11 @@ export default function PrediccionesPage() {
               </h2>
 
               <p className="text-xs text-slate-500">
-                El sistema consultará el modelo de ML para <b>todos los
-                platillos activos</b> y consolidará los insumos necesarios para
-                abastecer la demanda de la semana objetivo.
+                El sistema consultará el modelo de ML para{" "}
+                <b>todos los platillos activos</b> y consolidará los insumos
+                necesarios para abastecer la demanda de la semana objetivo.
               </p>
 
-              {/* HORIZONTE EN SEMANAS (global) */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Semanas hacia adelante
@@ -813,7 +996,6 @@ export default function PrediccionesPage() {
                 </p>
               </div>
 
-              {/* BOTÓN GLOBAL */}
               <button
                 type="submit"
                 disabled={loadingWeeklyPlan}
@@ -832,7 +1014,6 @@ export default function PrediccionesPage() {
                 )}
               </button>
 
-              {/* ERROR GLOBAL */}
               {weeklyError && (
                 <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
@@ -841,7 +1022,6 @@ export default function PrediccionesPage() {
               )}
             </form>
 
-            {/* RESUMEN GLOBAL */}
             <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h2 className="text-sm font-semibold text-slate-900">
                 Resumen del plan semanal
@@ -874,6 +1054,7 @@ export default function PrediccionesPage() {
                         Corresponde al inicio de la semana pronosticada.
                       </p>
                     </div>
+
                     <div className="rounded-xl bg-slate-50 p-3">
                       <p className="text-[11px] font-medium text-slate-500">
                         Demanda total estimada
@@ -886,6 +1067,7 @@ export default function PrediccionesPage() {
                         platillos.
                       </p>
                     </div>
+
                     <div className="rounded-xl bg-slate-50 p-3">
                       <p className="text-[11px] font-medium text-slate-500">
                         Insumos a comprar
@@ -910,9 +1092,7 @@ export default function PrediccionesPage() {
             </div>
           </div>
 
-          {/* TABLAS: PLATILLOS vs INSUMOS */}
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Tabla de predicciones por platillo */}
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h3 className="text-sm font-semibold text-slate-900">
                 Predicciones por platillo
@@ -928,14 +1108,15 @@ export default function PrediccionesPage() {
                 </div>
               )}
 
-              {!loadingWeeklyPlan && (!weeklyPlan || weeklyPlan.dishes.length === 0) && (
-                <div className="mt-3 text-xs text-slate-500">
-                  No hay predicciones disponibles. Genera un plan semanal para
-                  ver los datos.
-                </div>
-              )}
+              {!loadingWeeklyPlan &&
+                (!weeklyPlan || (weeklyPlan.dishes?.length ?? 0) === 0) && (
+                  <div className="mt-3 text-xs text-slate-500">
+                    No hay predicciones disponibles. Genera un plan semanal para
+                    ver los datos.
+                  </div>
+                )}
 
-              {weeklyPlan && weeklyPlan.dishes.length > 0 && (
+              {weeklyPlan && (weeklyPlan.dishes?.length ?? 0) > 0 && (
                 <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-slate-100">
                   <table className="min-w-full border-collapse text-[11px]">
                     <thead className="bg-slate-50">
@@ -952,13 +1133,13 @@ export default function PrediccionesPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {weeklyPlan.dishes.map((d) => (
+                      {weeklyPlan.dishes?.map((d) => (
                         <tr key={d.dishId}>
                           <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
                             {d.dishName}
                           </td>
                           <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                            {d.predictedDemand.toFixed(2)}
+                            {toNumber(d.predictedDemand).toFixed(2)}
                           </td>
                           <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
                             {d.confidence}
@@ -971,7 +1152,6 @@ export default function PrediccionesPage() {
               )}
             </div>
 
-            {/* Tabla de insumos consolidados */}
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h3 className="text-sm font-semibold text-slate-900">
                 Insumos consolidados para la semana
@@ -987,14 +1167,15 @@ export default function PrediccionesPage() {
                 </div>
               )}
 
-              {!loadingWeeklyPlan && (!weeklyPlan || weeklyPlan.supplies.length === 0) && (
-                <div className="mt-3 text-xs text-slate-500">
-                  No hay insumos calculados. Genera un plan semanal para ver los
-                  datos.
-                </div>
-              )}
+              {!loadingWeeklyPlan &&
+                (!weeklyPlan || (weeklyPlan.supplies?.length ?? 0) === 0) && (
+                  <div className="mt-3 text-xs text-slate-500">
+                    No hay insumos calculados. Genera un plan semanal para ver
+                    los datos.
+                  </div>
+                )}
 
-              {weeklyPlan && weeklyPlan.supplies.length > 0 && (
+              {weeklyPlan && (weeklyPlan.supplies?.length ?? 0) > 0 && (
                 <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-slate-100">
                   <table className="min-w-full border-collapse text-[11px]">
                     <thead className="bg-slate-50">
@@ -1017,25 +1198,25 @@ export default function PrediccionesPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {weeklyPlan.supplies.map((s) => (
+                      {weeklyPlan.supplies?.map((s) => (
                         <tr key={s.productId}>
                           <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
                             {s.productName}
                           </td>
                           <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                            {s.totalRequired.toFixed(3)}
+                            {toNumber(s.totalRequired).toFixed(3)}
                           </td>
                           <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                            {s.availableStock.toFixed(3)}
+                            {toNumber(s.availableStock).toFixed(3)}
                           </td>
                           <td
                             className={`border-b border-slate-100 px-2 py-1 text-right font-semibold ${
-                              s.quantityToBuy > 0
+                              toNumber(s.quantityToBuy) > 0
                                 ? "text-emerald-700"
                                 : "text-slate-500"
                             }`}
                           >
-                            {s.quantityToBuy.toFixed(3)}
+                            {toNumber(s.quantityToBuy).toFixed(3)}
                           </td>
                           <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
                             {s.unitMeasure}

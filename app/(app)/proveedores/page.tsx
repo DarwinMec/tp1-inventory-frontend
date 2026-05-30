@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Truck,
@@ -16,22 +16,13 @@ import {
   X,
   Sparkles,
 } from "lucide-react";
-import { apiFetch } from "@/lib/apiClient";
-
-// ==== Tipos alineados al backend ====
-
-// DTO/SupplierDTO.java
-type SupplierDTO = {
-  id?: string;
-  name: string;
-  contactPerson?: string | null;
-  phone?: string | null;
-  email?: string | null;
-  address?: string | null;
-  city?: string | null;
-  region?: string | null;
-  isActive?: boolean | null;
-};
+import type { SupplierDTO } from "@/lib/backend-types";
+import {
+  createSupplier,
+  deleteSupplier,
+  getSuppliers,
+  updateSupplier,
+} from "@/lib/services";
 
 type FormMode = "create" | "edit";
 
@@ -50,7 +41,6 @@ export default function ProveedoresPage() {
     null
   );
 
-  // Estado del formulario
   const [name, setName] = useState("");
   const [contactPerson, setContactPerson] = useState("");
   const [phone, setPhone] = useState("");
@@ -60,33 +50,31 @@ export default function ProveedoresPage() {
   const [region, setRegion] = useState("");
   const [isActive, setIsActive] = useState(true);
 
-  // Filtros
   const [searchTerm, setSearchTerm] = useState("");
   const [onlyActive, setOnlyActive] = useState(false);
 
-  // 1) Cargar proveedores
-  useEffect(() => {
-    const loadSuppliers = async () => {
-      try {
-        setLoadingSuppliers(true);
-        setError(null);
+  const loadSuppliers = useCallback(async () => {
+    try {
+      setLoadingSuppliers(true);
+      setError(null);
 
-        // Backend: GET /api/suppliers → "/suppliers" en apiFetch
-        const data = await apiFetch<SupplierDTO[]>("/suppliers");
-        setSuppliers(data ?? []);
-      } catch (e: any) {
-        console.error("Error cargando proveedores", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los proveedores. Verifica el backend y tus credenciales."
-        );
-      } finally {
-        setLoadingSuppliers(false);
-      }
-    };
+      const data = await getSuppliers();
 
-    loadSuppliers();
+      setSuppliers(data ?? []);
+    } catch (e: any) {
+      console.error("Error cargando proveedores", e);
+      setError(
+        e?.message ??
+          "No se pudieron cargar los proveedores. Verifica el backend y tus credenciales."
+      );
+    } finally {
+      setLoadingSuppliers(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadSuppliers();
+  }, [loadSuppliers]);
 
   const resetForm = () => {
     setMode("create");
@@ -100,34 +88,21 @@ export default function ProveedoresPage() {
     setRegion("");
     setIsActive(true);
     setError(null);
-    setSuccessMessage(null);
   };
 
-  const loadSupplierIntoForm = (s: SupplierDTO) => {
+  const loadSupplierIntoForm = (supplier: SupplierDTO) => {
     setMode("edit");
-    setEditingSupplierId(s.id ?? null);
-    setName(s.name ?? "");
-    setContactPerson(s.contactPerson ?? "");
-    setPhone(s.phone ?? "");
-    setEmail(s.email ?? "");
-    setAddress(s.address ?? "");
-    setCity(s.city ?? "");
-    setRegion(s.region ?? "");
-    setIsActive(s.isActive ?? true);
+    setEditingSupplierId(supplier.id ?? null);
+    setName(supplier.name ?? "");
+    setContactPerson(supplier.contactPerson ?? "");
+    setPhone(supplier.phone ?? "");
+    setEmail(supplier.email ?? "");
+    setAddress(supplier.address ?? "");
+    setCity(supplier.city ?? "");
+    setRegion(supplier.region ?? "");
+    setIsActive(supplier.isActive !== false);
     setError(null);
     setSuccessMessage(null);
-  };
-
-  const reloadSuppliers = async () => {
-    try {
-      setLoadingSuppliers(true);
-      const data = await apiFetch<SupplierDTO[]>("/suppliers");
-      setSuppliers(data ?? []);
-    } catch (e) {
-      console.error("Error recargando proveedores", e);
-    } finally {
-      setLoadingSuppliers(false);
-    }
   };
 
   const validateForm = (): boolean => {
@@ -144,8 +119,22 @@ export default function ProveedoresPage() {
     return true;
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const buildSupplierPayload = (): Partial<SupplierDTO> => {
+    return {
+      name: name.trim(),
+      contactPerson: contactPerson.trim() || null,
+      phone: phone.trim() || null,
+      email: email.trim() || null,
+      address: address.trim() || null,
+      city: city.trim() || null,
+      region: region.trim() || null,
+      isActive,
+    };
+  };
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+
     setError(null);
     setSuccessMessage(null);
 
@@ -154,36 +143,26 @@ export default function ProveedoresPage() {
     try {
       setSaving(true);
 
-      const dto: SupplierDTO = {
-        name: name.trim(),
-        contactPerson: contactPerson.trim() || undefined,
-        phone: phone.trim() || undefined,
-        email: email.trim() || undefined,
-        address: address.trim() || undefined,
-        city: city.trim() || undefined,
-        region: region.trim() || undefined,
-        isActive,
-      };
+      const payload = buildSupplierPayload();
 
       if (mode === "create") {
-        await apiFetch<SupplierDTO>("/suppliers", {
-          method: "POST",
-          body: JSON.stringify(dto),
-        });
+        await createSupplier(payload);
         setSuccessMessage("Proveedor creado correctamente.");
+
+        setName("");
+        setContactPerson("");
+        setPhone("");
+        setEmail("");
+        setAddress("");
+        setCity("");
+        setRegion("");
+        setIsActive(true);
       } else if (mode === "edit" && editingSupplierId) {
-        await apiFetch<SupplierDTO>(`/suppliers/${editingSupplierId}`, {
-          method: "PUT",
-          body: JSON.stringify(dto),
-        });
+        await updateSupplier(editingSupplierId, payload);
         setSuccessMessage("Proveedor actualizado correctamente.");
       }
 
-      await reloadSuppliers();
-
-      if (mode === "create") {
-        resetForm();
-      }
+      await loadSuppliers();
     } catch (e: any) {
       console.error("Error guardando proveedor", e);
       setError(
@@ -195,22 +174,24 @@ export default function ProveedoresPage() {
     }
   };
 
-  const handleDeleteSupplier = async (id: string) => {
-    if (!confirm("¿Seguro que deseas eliminar este proveedor?")) return;
+  const handleDeleteSupplier = async (supplierId: string) => {
+    const confirmed = window.confirm(
+      "¿Seguro que deseas eliminar este proveedor?"
+    );
+
+    if (!confirmed) return;
 
     try {
-      setDeleting(id);
+      setDeleting(supplierId);
       setError(null);
       setSuccessMessage(null);
 
-      await apiFetch<void>(`/suppliers/${id}`, {
-        method: "DELETE",
-      });
+      await deleteSupplier(supplierId);
 
       setSuccessMessage("Proveedor eliminado correctamente.");
-      await reloadSuppliers();
+      await loadSuppliers();
 
-      if (editingSupplierId === id) {
+      if (editingSupplierId === supplierId) {
         resetForm();
       }
     } catch (e: any) {
@@ -224,25 +205,30 @@ export default function ProveedoresPage() {
     }
   };
 
-  // Filtros / búsqueda
   const filteredSuppliers = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+
     return suppliers
-      .filter((s) => {
-        const term = searchTerm.toLowerCase();
+      .filter((supplier) => {
         if (term) {
-          const matchesName = (s.name ?? "")
+          const matchesName = (supplier.name ?? "")
             .toLowerCase()
             .includes(term);
-          const matchesCity = (s.city ?? "")
+          const matchesCity = (supplier.city ?? "")
             .toLowerCase()
             .includes(term);
-          const matchesRegion = (s.region ?? "")
+          const matchesRegion = (supplier.region ?? "")
             .toLowerCase()
             .includes(term);
-          if (!matchesName && !matchesCity && !matchesRegion) return false;
+
+          if (!matchesName && !matchesCity && !matchesRegion) {
+            return false;
+          }
         }
 
-        if (onlyActive && !s.isActive) return false;
+        if (onlyActive && supplier.isActive === false) {
+          return false;
+        }
 
         return true;
       })
@@ -250,24 +236,37 @@ export default function ProveedoresPage() {
   }, [suppliers, searchTerm, onlyActive]);
 
   const totalSuppliers = suppliers.length;
-  const activeSuppliers = suppliers.filter((s) => s.isActive).length;
+
+  const activeSuppliers = useMemo(
+    () => suppliers.filter((supplier) => supplier.isActive !== false).length,
+    [suppliers]
+  );
+
+  const uniqueZones = useMemo(() => {
+    return new Set(
+      suppliers
+        .map((supplier) => `${supplier.city ?? ""}|${supplier.region ?? ""}`)
+        .filter((value) => value.trim() !== "|")
+    ).size;
+  }, [suppliers]);
 
   return (
     <section className="space-y-6">
-      {/* ENCABEZADO */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
             <Sparkles className="h-3 w-3" />
             <span>Módulo de proveedores</span>
           </div>
+
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
             Gestión de proveedores
           </h1>
+
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
             Registra y administra tus proveedores, incluyendo datos de contacto
-            y ubicación. Estos registros se utilizarán luego en compras y
-            reportes.
+            y ubicación. Estos registros se utilizarán luego en compras,
+            abastecimiento y reportes.
           </p>
         </div>
 
@@ -279,12 +278,12 @@ export default function ProveedoresPage() {
         )}
       </header>
 
-      {/* TARJETAS RESUMEN */}
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100">
             <Users className="h-5 w-5 text-slate-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
               Total de proveedores
@@ -302,6 +301,7 @@ export default function ProveedoresPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
             <CheckCircle2 className="h-5 w-5 text-emerald-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
               Proveedores activos
@@ -319,20 +319,13 @@ export default function ProveedoresPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100">
             <MapPin className="h-5 w-5 text-slate-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
               Zonas registradas
             </span>
             <span className="text-lg font-semibold text-slate-900">
-              {useMemo(
-                () =>
-                  new Set(
-                    suppliers
-                      .map((s) => `${s.city ?? ""}|${s.region ?? ""}`)
-                      .filter((v) => v.trim() !== "|")
-                  ).size,
-                [suppliers]
-              )}
+              {loadingSuppliers ? "…" : uniqueZones}
             </span>
             <span className="text-[11px] text-slate-400">
               Combinaciones únicas de ciudad / región.
@@ -341,9 +334,7 @@ export default function ProveedoresPage() {
         </div>
       </div>
 
-      {/* CONTENIDO PRINCIPAL: LISTA + FORMULARIO */}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1.1fr)]">
-        {/* LISTA DE PROVEEDORES */}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -362,8 +353,8 @@ export default function ProveedoresPage() {
                   type="text"
                   placeholder="Buscar por nombre, ciudad o región…"
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-64 rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  className="w-64 rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                 />
               </div>
 
@@ -371,7 +362,7 @@ export default function ProveedoresPage() {
                 <input
                   type="checkbox"
                   checked={onlyActive}
-                  onChange={(e) => setOnlyActive(e.target.checked)}
+                  onChange={(event) => setOnlyActive(event.target.checked)}
                   className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                 />
                 <span>Mostrar solo activos</span>
@@ -409,50 +400,60 @@ export default function ProveedoresPage() {
                     </th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {filteredSuppliers.map((s) => (
-                    <tr key={s.id ?? s.name} className="hover:bg-slate-50/60">
+                  {filteredSuppliers.map((supplier) => (
+                    <tr
+                      key={supplier.id ?? supplier.name}
+                      className="hover:bg-slate-50/60"
+                    >
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-800">
                         <div className="flex flex-col">
-                          <span className="font-medium">{s.name}</span>
-                          {s.email && (
+                          <span className="font-medium">{supplier.name}</span>
+
+                          {supplier.email && (
                             <span className="flex items-center gap-1 text-[10px] text-slate-400">
                               <Mail className="h-3 w-3" />
-                              {s.email}
+                              {supplier.email}
                             </span>
                           )}
-                          {s.phone && (
+
+                          {supplier.phone && (
                             <span className="flex items-center gap-1 text-[10px] text-slate-400">
                               <Phone className="h-3 w-3" />
-                              {s.phone}
+                              {supplier.phone}
                             </span>
                           )}
                         </div>
                       </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
-                        {s.contactPerson ?? "—"}
+                        {supplier.contactPerson ?? "—"}
                       </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
                         <div className="flex flex-col">
-                          {(s.city || s.region) && (
+                          {(supplier.city || supplier.region) && (
                             <span className="flex items-center gap-1">
                               <MapPin className="h-3 w-3 text-slate-400" />
                               <span>
-                                {s.city ?? "—"}
-                                {s.city && s.region ? ", " : ""}
-                                {s.region ?? ""}
+                                {supplier.city ?? "—"}
+                                {supplier.city && supplier.region ? ", " : ""}
+                                {supplier.region ?? ""}
                               </span>
                             </span>
                           )}
-                          {s.address && (
+
+                          {supplier.address && (
                             <span className="text-[10px] text-slate-400">
-                              {s.address}
+                              {supplier.address}
                             </span>
                           )}
                         </div>
                       </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-center">
-                        {s.isActive ? (
+                        {supplier.isActive !== false ? (
                           <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
                             Sí
                           </span>
@@ -462,25 +463,31 @@ export default function ProveedoresPage() {
                           </span>
                         )}
                       </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button
                             type="button"
-                            onClick={() => loadSupplierIntoForm(s)}
+                            onClick={() => loadSupplierIntoForm(supplier)}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50"
                           >
                             <Edit className="h-3 w-3" />
                             Editar
                           </button>
-                          {s.id && (
+
+                          {supplier.id && (
                             <button
                               type="button"
-                              disabled={deleting === s.id}
-                              onClick={() => handleDeleteSupplier(s.id!)}
+                              disabled={deleting === supplier.id}
+                              onClick={() =>
+                                handleDeleteSupplier(supplier.id as string)
+                              }
                               className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
                             >
                               <Trash2 className="h-3 w-3" />
-                              {deleting === s.id ? "Eliminando…" : "Eliminar"}
+                              {deleting === supplier.id
+                                ? "Eliminando…"
+                                : "Eliminar"}
                             </button>
                           )}
                         </div>
@@ -493,18 +500,16 @@ export default function ProveedoresPage() {
           )}
         </div>
 
-        {/* FORMULARIO DE PROVEEDOR */}
         <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                {mode === "create"
-                  ? "Nuevo proveedor"
-                  : "Editar proveedor"}
+                {mode === "create" ? "Nuevo proveedor" : "Editar proveedor"}
               </h2>
+
               <p className="text-xs text-slate-500">
                 Completa los datos del proveedor. Estos se usarán luego en las
-                órdenes de compra y reportes.
+                órdenes de compra, abastecimiento y reportes.
               </p>
             </div>
 
@@ -528,16 +533,16 @@ export default function ProveedoresPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Fila 1: nombre + contacto */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Nombre del proveedor
                 </label>
+
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(event) => setName(event.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                   placeholder="Ej: Distribuidora El Norte"
                 />
@@ -547,29 +552,31 @@ export default function ProveedoresPage() {
                 <label className="text-xs font-medium text-slate-700">
                   Persona de contacto
                 </label>
+
                 <input
                   type="text"
                   value={contactPerson}
-                  onChange={(e) => setContactPerson(e.target.value)}
+                  onChange={(event) => setContactPerson(event.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                   placeholder="Ej: Juan Pérez"
                 />
               </div>
             </div>
 
-            {/* Fila 2: Teléfono + Email */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Teléfono
                 </label>
+
                 <div className="relative">
                   <Phone className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+
                   <input
                     type="text"
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                    onChange={(event) => setPhone(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                     placeholder="Ej: +51 999 999 999"
                   />
                 </div>
@@ -579,46 +586,49 @@ export default function ProveedoresPage() {
                 <label className="text-xs font-medium text-slate-700">
                   Correo electrónico
                 </label>
+
                 <div className="relative">
                   <Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                     placeholder="Ej: contacto@proveedor.com"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Fila 3: Dirección */}
             <div className="space-y-1">
               <label className="text-xs font-medium text-slate-700">
                 Dirección
               </label>
+
               <div className="relative">
                 <MapPin className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+
                 <input
                   type="text"
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  onChange={(event) => setAddress(event.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                   placeholder="Ej: Jr. Los Jazmines 123"
                 />
               </div>
             </div>
 
-            {/* Fila 4: Ciudad + Región + Activo */}
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-700">
                   Ciudad
                 </label>
+
                 <input
                   type="text"
                   value={city}
-                  onChange={(e) => setCity(e.target.value)}
+                  onChange={(event) => setCity(event.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                   placeholder="Ej: Chiclayo"
                 />
@@ -628,10 +638,11 @@ export default function ProveedoresPage() {
                 <label className="text-xs font-medium text-slate-700">
                   Región / Departamento
                 </label>
+
                 <input
                   type="text"
                   value={region}
-                  onChange={(e) => setRegion(e.target.value)}
+                  onChange={(event) => setRegion(event.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                   placeholder="Ej: Lambayeque"
                 />
@@ -642,9 +653,10 @@ export default function ProveedoresPage() {
                   id="supplier-active"
                   type="checkbox"
                   checked={isActive}
-                  onChange={(e) => setIsActive(e.target.checked)}
+                  onChange={(event) => setIsActive(event.target.checked)}
                   className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                 />
+
                 <label
                   htmlFor="supplier-active"
                   className="text-xs font-medium text-slate-700"
@@ -654,7 +666,6 @@ export default function ProveedoresPage() {
               </div>
             </div>
 
-            {/* BOTÓN GUARDAR */}
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="submit"

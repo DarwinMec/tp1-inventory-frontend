@@ -1,69 +1,81 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  Plus,
-  Utensils,
-  Trash2,
+  CheckCircle2,
+  CircleDollarSign,
   Edit,
+  Filter,
   Package,
-  X,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
   Sparkles,
+  Trash2,
+  Utensils,
+  X,
 } from "lucide-react";
-import { apiFetch } from "@/lib/apiClient";
+import { useAuthContext } from "@/context/AuthContext";
+import type { DishDTO, ProductDTO } from "@/lib/backend-types";
+import {
+  createDish,
+  deleteDish,
+  getDishes,
+  getProducts,
+  updateDish,
+} from "@/lib/services";
 
-// ==== Tipos alineados al backend ====
-
-// DTO/DishIngredientDTO.java
-type DishIngredientDTO = {
-  id?: string;
-  productId: string;
-  productName?: string | null;
-  quantityNeeded: number;
-  unit: string;
-  costPerUnit: number;
-};
-
-// DTO/DishDTO.java
-type DishDTO = {
-  id?: string;
-  name: string;
-  description?: string | null;
-  category?: string | null;
-  price?: number | null;
-  isActive?: boolean | null;
-  preparationTime?: number | null;
-  ingredients?: DishIngredientDTO[];
-};
-
-// ProductDTO equivalente al usado en módulo de insumos
-type ProductDTO = {
-  id: string;
-  name: string;
-  description?: string | null;
-  unitMeasure: string;
-  minStock?: number | null;
-  maxStock?: number | null;
-  reorderPoint?: number | null;
-  unitCost?: number | null;
-  isActive?: boolean | null;
-  categoryId?: string | null;
-  categoryName?: string | null;
-};
-
-// Estado del formulario de ingrediente (para el front)
 type IngredientForm = {
   tempId: string;
   productId: string;
   quantityNeeded: number;
-  unit: string;
+  unitMeasure: string;
   costPerUnit: number;
 };
 
 type FormMode = "create" | "edit";
 
+function toNumber(value?: number | string | null) {
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function toNumberOrNull(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value.replace(",", "."));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatCurrency(value?: number | null) {
+  return new Intl.NumberFormat("es-PE", {
+    style: "currency",
+    currency: "PEN",
+  }).format(toNumber(value));
+}
+
+function buildTempId() {
+  return `ingredient-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getIngredientUnit(
+  ingredient: NonNullable<DishDTO["ingredients"]>[number]
+) {
+  const extended = ingredient as typeof ingredient & {
+    unit?: string | null;
+    unitMeasure?: string | null;
+  };
+
+  return extended.unit ?? extended.unitMeasure ?? "";
+}
+
 export default function PlatillosPage() {
+  const { hasRole } = useAuthContext();
+
+  const canManageDishes = hasRole(["ADMIN", "MANAGER"]);
+
   const [dishes, setDishes] = useState<DishDTO[]>([]);
   const [products, setProducts] = useState<ProductDTO[]>([]);
 
@@ -75,70 +87,84 @@ export default function PlatillosPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("todos");
+  const [onlyActive, setOnlyActive] = useState(false);
+
   const [mode, setMode] = useState<FormMode>("create");
   const [editingDishId, setEditingDishId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
-  const [price, setPrice] = useState<string>("");
-  const [preparationTime, setPreparationTime] = useState<string>("");
+  const [price, setPrice] = useState("");
+  const [preparationTime, setPreparationTime] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [ingredients, setIngredients] = useState<IngredientForm[]>([]);
 
-  // Cargar platillos
-  useEffect(() => {
-    const loadDishes = async () => {
-      try {
-        setLoadingDishes(true);
-        setError(null);
-        const data = await apiFetch<DishDTO[]>("/dishes");
-        setDishes(data ?? []);
-      } catch (e: any) {
-        console.error("Error cargando platillos", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los platillos. Verifica el backend y tus credenciales."
-        );
-      } finally {
-        setLoadingDishes(false);
-      }
-    };
+  const [highlightedDishId, setHighlightedDishId] = useState<string | null>(
+    null
+  );
+  const [showOnlyHighlightedDish, setShowOnlyHighlightedDish] = useState(false);
+  const [autoLoadedHighlightedDish, setAutoLoadedHighlightedDish] =
+    useState(false);
 
+  const loadDishes = useCallback(async () => {
+    try {
+      setLoadingDishes(true);
+      setError(null);
+
+      const data = await getDishes();
+      setDishes(data ?? []);
+    } catch (e: any) {
+      console.error("Error cargando platillos", e);
+      setError(
+        e?.message ??
+          "No se pudieron cargar los platillos. Verifica el backend y tus credenciales."
+      );
+    } finally {
+      setLoadingDishes(false);
+    }
+  }, []);
+
+  const loadProducts = useCallback(async () => {
+    try {
+      setLoadingProducts(true);
+
+      const data = await getProducts();
+      setProducts((data ?? []).filter((product) => product.isActive !== false));
+    } catch (e: any) {
+      console.error("Error cargando productos", e);
+      setError(
+        e?.message ??
+          "No se pudieron cargar los insumos para definir los ingredientes."
+      );
+    } finally {
+      setLoadingProducts(false);
+    }
+  }, []);
+
+  useEffect(() => {
     loadDishes();
-  }, []);
-
-  // Cargar productos (para ingredientes)
-  useEffect(() => {
-    const loadProducts = async () => {
-      try {
-        setLoadingProducts(true);
-        const data = await apiFetch<ProductDTO[]>("/products");
-        setProducts(data ?? []);
-      } catch (e: any) {
-        console.error("Error cargando productos", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los productos para definir ingredientes."
-        );
-      } finally {
-        setLoadingProducts(false);
-      }
-    };
-
     loadProducts();
+  }, [loadDishes, loadProducts]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const dishParam = params.get("dishId");
+
+    if (dishParam) {
+      setHighlightedDishId(dishParam);
+      setShowOnlyHighlightedDish(true);
+      setSearchTerm("");
+      setSelectedCategory("todos");
+      setOnlyActive(false);
+    }
   }, []);
 
-  // Categorías únicas desde los platillos
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    dishes.forEach((d) => {
-      if (d.category) set.add(d.category);
-    });
-    return Array.from(set).sort();
-  }, [dishes]);
-
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setMode("create");
     setEditingDishId(null);
     setName("");
@@ -150,52 +176,153 @@ export default function PlatillosPage() {
     setIngredients([]);
     setError(null);
     setSuccessMessage(null);
-  };
+  }, []);
 
-  const loadDishIntoForm = (dish: DishDTO) => {
+  const loadDishIntoForm = useCallback((dish: DishDTO) => {
     setMode("edit");
     setEditingDishId(dish.id ?? null);
     setName(dish.name ?? "");
     setCategory(dish.category ?? "");
     setDescription(dish.description ?? "");
-    setPrice(dish.price != null ? dish.price.toString() : "");
+    setPrice(dish.price != null ? String(dish.price) : "");
     setPreparationTime(
-      dish.preparationTime != null ? dish.preparationTime.toString() : ""
+      dish.preparationTime != null ? String(dish.preparationTime) : ""
     );
-    setIsActive(dish.isActive ?? true);
+    setIsActive(dish.isActive !== false);
 
-    const ingForms: IngredientForm[] =
-      dish.ingredients?.map((ing, idx) => ({
-        tempId: `${dish.id ?? "new"}-${idx}`,
-        productId: ing.productId,
-        quantityNeeded: ing.quantityNeeded ?? 0,
-        unit: ing.unit ?? "",
-        costPerUnit: ing.costPerUnit ?? 0,
+    const mappedIngredients: IngredientForm[] =
+      dish.ingredients?.map((ingredient, index) => ({
+        tempId: `${dish.id ?? "dish"}-${ingredient.productId}-${index}`,
+        productId: ingredient.productId,
+        quantityNeeded: toNumber(ingredient.quantityNeeded),
+        unitMeasure: getIngredientUnit(ingredient),
+        costPerUnit: toNumber(ingredient.costPerUnit),
       })) ?? [];
 
-    setIngredients(ingForms);
+    setIngredients(mappedIngredients);
     setError(null);
     setSuccessMessage(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!highlightedDishId || autoLoadedHighlightedDish || dishes.length === 0) {
+      return;
+    }
+
+    const dish = dishes.find((item) => item.id === highlightedDishId);
+
+    if (dish) {
+      loadDishIntoForm(dish);
+      setAutoLoadedHighlightedDish(true);
+    }
+  }, [
+    highlightedDishId,
+    autoLoadedHighlightedDish,
+    dishes,
+    loadDishIntoForm,
+  ]);
+
+  const categoryNames = useMemo(() => {
+    const set = new Set<string>();
+
+    dishes.forEach((dish) => {
+      if (dish.category) set.add(dish.category);
+    });
+
+    return Array.from(set).sort();
+  }, [dishes]);
+
+  const visibleDishes = useMemo(() => {
+    return dishes
+      .filter((dish) => {
+        if (
+          showOnlyHighlightedDish &&
+          highlightedDishId &&
+          dish.id !== highlightedDishId
+        ) {
+          return false;
+        }
+
+        const term = searchTerm.toLowerCase().trim();
+
+        if (term) {
+          const matchName = dish.name.toLowerCase().includes(term);
+          const matchCategory = (dish.category ?? "")
+            .toLowerCase()
+            .includes(term);
+          const matchDescription = (dish.description ?? "")
+            .toLowerCase()
+            .includes(term);
+
+          if (!matchName && !matchCategory && !matchDescription) {
+            return false;
+          }
+        }
+
+        if (
+          selectedCategory !== "todos" &&
+          (dish.category ?? "") !== selectedCategory
+        ) {
+          return false;
+        }
+
+        if (onlyActive && dish.isActive === false) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [
+    dishes,
+    highlightedDishId,
+    showOnlyHighlightedDish,
+    searchTerm,
+    selectedCategory,
+    onlyActive,
+  ]);
+
+  const totalDishes = dishes.length;
+  const activeDishes = dishes.filter((dish) => dish.isActive !== false).length;
+  const inactiveDishes = dishes.filter((dish) => dish.isActive === false).length;
+  const dishesWithIngredients = dishes.filter(
+    (dish) => (dish.ingredients?.length ?? 0) > 0
+  ).length;
+
+  const recipeCost = useMemo(() => {
+    return ingredients.reduce(
+      (acc, ingredient) =>
+        acc +
+        toNumber(ingredient.quantityNeeded) * toNumber(ingredient.costPerUnit),
+      0
+    );
+  }, [ingredients]);
+
+  const salePrice = toNumberOrNull(price) ?? 0;
+  const estimatedMargin = salePrice - recipeCost;
 
   const handleAddIngredient = () => {
-    if (!products || products.length === 0) return;
+    if (products.length === 0) {
+      setError("No hay insumos activos disponibles para agregar ingredientes.");
+      return;
+    }
 
     const defaultProduct = products[0];
+
     setIngredients((prev) => [
       ...prev,
       {
-        tempId: `temp-${Date.now()}-${prev.length}`,
+        tempId: buildTempId(),
         productId: defaultProduct.id,
         quantityNeeded: 1,
-        unit: defaultProduct.unitMeasure,
-        costPerUnit: defaultProduct.unitCost ?? 0,
+        unitMeasure: defaultProduct.unitMeasure,
+        costPerUnit: toNumber(defaultProduct.unitCost),
       },
     ]);
   };
 
   const handleRemoveIngredient = (tempId: string) => {
-    setIngredients((prev) => prev.filter((i) => i.tempId !== tempId));
+    setIngredients((prev) => prev.filter((item) => item.tempId !== tempId));
   };
 
   const handleIngredientChange = (
@@ -204,81 +331,124 @@ export default function PlatillosPage() {
     value: string
   ) => {
     setIngredients((prev) =>
-      prev.map((ing) => {
-        if (ing.tempId !== tempId) return ing;
+      prev.map((ingredient) => {
+        if (ingredient.tempId !== tempId) return ingredient;
 
         if (field === "productId") {
-          const prod = products.find((p) => p.id === value);
-          if (!prod) {
-            return { ...ing, productId: value };
+          const product = products.find((item) => item.id === value);
+
+          if (!product) {
+            return {
+              ...ingredient,
+              productId: value,
+            };
           }
+
           return {
-            ...ing,
-            productId: prod.id,
-            unit: prod.unitMeasure,
-            costPerUnit: prod.unitCost ?? ing.costPerUnit,
+            ...ingredient,
+            productId: product.id,
+            unitMeasure: product.unitMeasure,
+            costPerUnit: toNumber(product.unitCost),
           };
         }
 
-        if (field === "quantityNeeded" || field === "costPerUnit") {
-          const num = Number(value.replace(",", ".")) || 0;
+        if (field === "quantityNeeded") {
           return {
-            ...ing,
-            [field]: num,
+            ...ingredient,
+            quantityNeeded: Math.max(0, Number(value.replace(",", ".")) || 0),
           };
         }
 
-        return {
-          ...ing,
-          [field]: value,
-        };
+        if (field === "costPerUnit") {
+          return {
+            ...ingredient,
+            costPerUnit: Math.max(0, Number(value.replace(",", ".")) || 0),
+          };
+        }
+
+        if (field === "unitMeasure") {
+          return {
+            ...ingredient,
+            unitMeasure: value,
+          };
+        }
+
+        return ingredient;
       })
     );
   };
 
-  const validateForm = (): boolean => {
+  const validateForm = () => {
     if (!name.trim()) {
       setError("El nombre del platillo es obligatorio.");
       return false;
     }
-    if (!category.trim()) {
-      setError("La categoría del platillo es obligatoria.");
+
+    const parsedPrice = toNumberOrNull(price);
+
+    if (parsedPrice == null || parsedPrice < 0) {
+      setError("El precio del platillo debe ser válido y no negativo.");
       return false;
     }
-    if (!price.trim() || Number(price) <= 0) {
-      setError("El precio debe ser un número mayor a 0.");
+
+    const parsedPreparationTime = toNumberOrNull(preparationTime);
+
+    if (
+      preparationTime.trim() !== "" &&
+      (parsedPreparationTime == null || parsedPreparationTime < 0)
+    ) {
+      setError("El tiempo de preparación debe ser válido y no negativo.");
       return false;
     }
-    if (ingredients.length === 0) {
-      setError("Agrega al menos un ingrediente para el platillo.");
-      return false;
-    }
+
     const hasInvalidIngredient = ingredients.some(
-      (ing) => !ing.productId || ing.quantityNeeded <= 0
+      (ingredient) => !ingredient.productId || ingredient.quantityNeeded <= 0
     );
+
     if (hasInvalidIngredient) {
       setError(
-        "Todos los ingredientes deben tener un producto seleccionado y una cantidad mayor a 0."
+        "Todos los ingredientes deben tener un insumo y una cantidad mayor a 0."
       );
       return false;
     }
+
+    const hasDuplicatedIngredient =
+      new Set(ingredients.map((ingredient) => ingredient.productId)).size !==
+      ingredients.length;
+
+    if (hasDuplicatedIngredient) {
+      setError(
+        "No puedes repetir el mismo insumo dentro de la receta del platillo."
+      );
+      return false;
+    }
+
     return true;
   };
 
-  const reloadDishes = async () => {
-    try {
-      setLoadingDishes(true);
-      const data = await apiFetch<DishDTO[]>("/dishes");
-      setDishes(data ?? []);
-    } catch (e) {
-      console.error("Error recargando platillos", e);
-    } finally {
-      setLoadingDishes(false);
-    }
+  const buildPayload = () => {
+    return {
+      name: name.trim(),
+      category: category.trim() || null,
+      description: description.trim() || null,
+      price: toNumberOrNull(price),
+      preparationTime: toNumberOrNull(preparationTime),
+      isActive,
+      ingredients: ingredients.map((ingredient) => ({
+        productId: ingredient.productId,
+        quantityNeeded: ingredient.quantityNeeded,
+        unit: ingredient.unitMeasure,
+        unitMeasure: ingredient.unitMeasure,
+        costPerUnit: ingredient.costPerUnit,
+      })),
+    } as unknown as Partial<DishDTO>;
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!canManageDishes) return;
+
     setError(null);
     setSuccessMessage(null);
 
@@ -287,148 +457,285 @@ export default function PlatillosPage() {
     try {
       setSaving(true);
 
-      const dto: DishDTO = {
-        name: name.trim(),
-        category: category.trim(),
-        description: description.trim() || undefined,
-        price: Number(price.replace(",", ".")),
-        isActive,
-        preparationTime: preparationTime
-          ? Number(preparationTime.replace(",", "."))
-          : undefined,
-        ingredients: ingredients.map((ing) => ({
-          productId: ing.productId,
-          quantityNeeded: ing.quantityNeeded,
-          unit: ing.unit,
-          costPerUnit: ing.costPerUnit,
-        })),
-      };
+      const payload = buildPayload();
 
-      if (mode === "create") {
-        await apiFetch<DishDTO>("/dishes", {
-          method: "POST",
-          body: JSON.stringify(dto),
-        });
-        setSuccessMessage("Platillo creado correctamente.");
-      } else if (mode === "edit" && editingDishId) {
-        await apiFetch<DishDTO>(`/dishes/${editingDishId}`, {
-          method: "PUT",
-          body: JSON.stringify(dto),
-        });
+      if (mode === "edit" && editingDishId) {
+        await updateDish(editingDishId, payload);
         setSuccessMessage("Platillo actualizado correctamente.");
+      } else {
+        await createDish(payload);
+        setSuccessMessage("Platillo creado correctamente.");
       }
 
-      await reloadDishes();
-      if (mode === "create") {
-        resetForm();
-      }
+      resetForm();
+      await loadDishes();
     } catch (e: any) {
       console.error("Error guardando platillo", e);
-      setError(
-        e?.message ??
-          "Ocurrió un error al guardar el platillo. Verifica el backend y tus permisos (se requiere rol ADMIN)."
-      );
+      setError(e?.message ?? "No se pudo guardar el platillo.");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDeleteDish = async (dishId: string) => {
-    if (!confirm("¿Seguro que deseas eliminar este platillo?")) return;
+  const handleDelete = async (dish: DishDTO) => {
+    if (!canManageDishes || !dish.id) return;
+
+    const confirmed = window.confirm(
+      `¿Seguro que deseas eliminar el platillo "${dish.name}"?`
+    );
+
+    if (!confirmed) return;
 
     try {
-      setDeleting(dishId);
+      setDeleting(dish.id);
       setError(null);
       setSuccessMessage(null);
 
-      await apiFetch<void>(`/dishes/${dishId}`, {
-        method: "DELETE",
-      });
+      await deleteDish(dish.id);
 
       setSuccessMessage("Platillo eliminado correctamente.");
-      await reloadDishes();
 
-      if (editingDishId === dishId) {
+      if (editingDishId === dish.id) {
         resetForm();
       }
+
+      await loadDishes();
     } catch (e: any) {
       console.error("Error eliminando platillo", e);
       setError(
         e?.message ??
-          "No se pudo eliminar el platillo. Verifica que no esté siendo usado en otras entidades."
+          "No se pudo eliminar el platillo. Puede estar asociado a ventas o predicciones."
       );
     } finally {
       setDeleting(null);
     }
   };
 
-  const formatCurrency = (value?: number | null) => {
-    if (value == null) return "S/ —";
-    return `S/ ${value.toFixed(2)}`;
-  };
-
   return (
     <section className="space-y-6">
-      {/* ENCABEZADO */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
             <Sparkles className="h-3 w-3" />
             <span>Módulo de platillos</span>
           </div>
+
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-            Gestión de platillos
+            Platillos y recetas
           </h1>
+
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
-            Crea y administra los platillos de tu carta, definiendo sus
-            ingredientes desde el primer momento. La lógica actual del backend
-            requiere registrar el platillo junto con sus ingredientes en una
-            sola operación.
+            Gestiona la carta del restaurante, define ingredientes por platillo
+            y calcula el costo estimado de cada receta.
           </p>
         </div>
 
-        {error && (
-          <div className="flex max-w-xs items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
-            <p>{error}</p>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            loadDishes();
+            loadProducts();
+          }}
+          disabled={loadingDishes || loadingProducts}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${
+              loadingDishes || loadingProducts ? "animate-spin" : ""
+            }`}
+          />
+          Actualizar
+        </button>
       </header>
 
-      {/* CONTENIDO PRINCIPAL: LISTA + FORMULARIO */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1.1fr)]">
-        {/* LISTA DE PLATILLOS */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">
-                Platillos registrados
-              </h2>
-              <p className="text-xs text-slate-500">
-                Lista de platillos actualmente configurados en el sistema.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={resetForm}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-            >
-              <Plus className="h-3 w-3" />
-              Nuevo platillo
-            </button>
+      {(error || successMessage) && (
+        <div
+          className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+            error
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {error ? (
+            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+          ) : (
+            <CheckCircle2 className="mt-[2px] h-3.5 w-3.5" />
+          )}
+          <p>{error ?? successMessage}</p>
+        </div>
+      )}
+
+      {highlightedDishId && (
+        <div className="flex flex-col gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+            <p>
+              Llegaste a este módulo desde una alerta. El sistema está mostrando
+              el platillo relacionado para revisar su configuración, estado e
+              ingredientes.
+            </p>
           </div>
 
+          <button
+            type="button"
+            onClick={() => {
+              setShowOnlyHighlightedDish(false);
+              setHighlightedDishId(null);
+              setAutoLoadedHighlightedDish(false);
+
+              if (typeof window !== "undefined") {
+                window.history.replaceState(null, "", "/platillos");
+              }
+            }}
+            className="rounded-lg border border-blue-200 bg-white px-3 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100"
+          >
+            Ver todos los platillos
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-4">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100">
+            <Utensils className="h-5 w-5 text-slate-700" />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500">
+              Total de platillos
+            </p>
+            <p className="text-lg font-semibold text-slate-900">
+              {loadingDishes ? "…" : totalDishes}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {activeDishes} activos · {inactiveDishes} inactivos
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
+            <CheckCircle2 className="h-5 w-5 text-emerald-700" />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500">
+              Con receta
+            </p>
+            <p className="text-lg font-semibold text-slate-900">
+              {loadingDishes ? "…" : dishesWithIngredients}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Tienen ingredientes configurados.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
+            <Package className="h-5 w-5 text-blue-700" />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500">
+              Insumos activos
+            </p>
+            <p className="text-lg font-semibold text-slate-900">
+              {loadingProducts ? "…" : products.length}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Disponibles para recetas.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-50">
+            <CircleDollarSign className="h-5 w-5 text-amber-700" />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500">
+              Costo receta actual
+            </p>
+            <p className="text-lg font-semibold text-slate-900">
+              {formatCurrency(recipeCost)}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Margen estimado: {formatCurrency(estimatedMargin)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Listado de platillos
+              </h2>
+              <p className="text-xs text-slate-500">
+                Consulta los platillos registrados, su precio, estado y cantidad
+                de ingredientes.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar platillo…"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  disabled={showOnlyHighlightedDish}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400 sm:w-64"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4 text-slate-400" />
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  disabled={showOnlyHighlightedDish}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400 sm:w-48"
+                >
+                  <option value="todos">Todas</option>
+                  {categoryNames.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={onlyActive}
+              onChange={(e) => setOnlyActive(e.target.checked)}
+              disabled={showOnlyHighlightedDish}
+              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 disabled:opacity-60"
+            />
+            Mostrar solo platillos activos
+          </label>
+
           {loadingDishes ? (
-            <div className="flex min-h-[180px] items-center justify-center text-xs text-slate-500">
+            <div className="flex min-h-[320px] items-center justify-center text-xs text-slate-500">
               Cargando platillos…
             </div>
-          ) : dishes.length === 0 ? (
-            <div className="flex min-h-[180px] items-center justify-center text-xs text-slate-500">
-              Aún no hay platillos registrados. Crea el primero con el
-              formulario de la derecha.
+          ) : visibleDishes.length === 0 ? (
+            <div className="flex min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+              {highlightedDishId
+                ? "No se encontró el platillo relacionado con la alerta."
+                : "No se encontraron platillos con los filtros aplicados."}
             </div>
           ) : (
-            <div className="max-h-[460px] overflow-auto rounded-xl border border-slate-100">
+            <div className="max-h-[560px] overflow-auto rounded-xl border border-slate-100">
               <table className="min-w-full border-collapse text-[11px]">
                 <thead className="bg-slate-50">
                   <tr>
@@ -441,83 +748,96 @@ export default function PlatillosPage() {
                     <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
                       Precio
                     </th>
-                    <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
-                      Prep. (min)
-                    </th>
-                    <th className="border-b border-slate-100 px-3 py-2 text-center font-medium text-slate-600">
-                      Activo
-                    </th>
                     <th className="border-b border-slate-100 px-3 py-2 text-center font-medium text-slate-600">
                       Ingredientes
                     </th>
-                    <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
-                      Acciones
+                    <th className="border-b border-slate-100 px-3 py-2 text-center font-medium text-slate-600">
+                      Estado
                     </th>
+                    {canManageDishes && (
+                      <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
+                        Acciones
+                      </th>
+                    )}
                   </tr>
                 </thead>
+
                 <tbody>
-                  {dishes.map((dish) => (
-                    <tr key={dish.id} className="hover:bg-slate-50/60">
+                  {visibleDishes.map((dish) => (
+                    <tr
+                      key={dish.id}
+                      className={`hover:bg-slate-50/60 ${
+                        dish.id === highlightedDishId ? "bg-blue-50/80" : ""
+                      }`}
+                    >
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-800">
                         <div className="flex flex-col">
-                          <span className="font-medium">
-                            {dish.name}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{dish.name}</span>
+
+                            {dish.id === highlightedDishId && (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold text-blue-700">
+                                Relacionado con alerta
+                              </span>
+                            )}
+                          </div>
+
                           {dish.description && (
-                            <span className="text-[10px] text-slate-400">
+                            <span className="line-clamp-1 text-[10px] text-slate-400">
                               {dish.description}
                             </span>
                           )}
                         </div>
                       </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
                         {dish.category ?? "—"}
                       </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-800">
-                        {formatCurrency(dish.price ?? undefined)}
+
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-semibold text-slate-800">
+                        {formatCurrency(dish.price)}
                       </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-700">
-                        {dish.preparationTime != null
-                          ? `${dish.preparationTime} min`
-                          : "—"}
-                      </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-center">
-                        {dish.isActive ? (
-                          <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                            Sí
-                          </span>
-                        ) : (
-                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                            No
-                          </span>
-                        )}
-                      </td>
+
                       <td className="border-b border-slate-100 px-3 py-2 text-center text-slate-700">
                         {dish.ingredients?.length ?? 0}
                       </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => loadDishIntoForm(dish)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            <Edit className="h-3 w-3" />
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            disabled={deleting === dish.id}
-                            onClick={() =>
-                              dish.id && handleDeleteDish(dish.id)
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            {deleting === dish.id ? "Eliminando…" : "Eliminar"}
-                          </button>
-                        </div>
+
+                      <td className="border-b border-slate-100 px-3 py-2 text-center">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            dish.isActive === false
+                              ? "border-slate-200 bg-slate-100 text-slate-500"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {dish.isActive === false ? "Inactivo" : "Activo"}
+                        </span>
                       </td>
+
+                      {canManageDishes && (
+                        <td className="border-b border-slate-100 px-3 py-2 text-right">
+                          <div className="inline-flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => loadDishIntoForm(dish)}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                              title="Editar platillo"
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(dish)}
+                              disabled={deleting === dish.id}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-100 text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+                              title="Eliminar platillo"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -526,18 +846,18 @@ export default function PlatillosPage() {
           )}
         </div>
 
-        {/* FORMULARIO DE PLATILLO */}
-        <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+        >
+          <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                {mode === "create"
-                  ? "Nuevo platillo"
-                  : "Editar platillo"}
+                {mode === "edit" ? "Editar platillo" : "Registrar platillo"}
               </h2>
               <p className="text-xs text-slate-500">
-                Completa los campos del platillo y define los ingredientes que
-                utiliza. Estos ingredientes se guardarán junto con el platillo.
+                Define los datos del platillo y los insumos que componen su
+                receta.
               </p>
             </div>
 
@@ -545,300 +865,322 @@ export default function PlatillosPage() {
               <button
                 type="button"
                 onClick={resetForm}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100"
+                disabled={saving}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
               >
                 <X className="h-3 w-3" />
-                Cancelar edición
+                Nuevo
               </button>
             )}
           </div>
 
-          {successMessage && (
-            <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-              <Package className="mt-[2px] h-3.5 w-3.5" />
-              <p>{successMessage}</p>
+          {!canManageDishes && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Tu rol puede consultar platillos, pero no crear ni modificarlos.
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Datos básicos */}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Nombre del platillo
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-                  placeholder="Ej: Lomo Saltado"
-                />
-              </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-xs font-medium text-slate-600 sm:col-span-2">
+              Nombre del platillo
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={!canManageDishes || saving}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                placeholder="Ej. Arroz con pollo"
+              />
+            </label>
 
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Categoría
-                </label>
-                <input
-                  type="text"
-                  list="dish-categories"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-                  placeholder="Ej: Platos de fondo"
-                />
-                {categories.length > 0 && (
-                  <datalist id="dish-categories">
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat} />
-                    ))}
-                  </datalist>
-                )}
-              </div>
-            </div>
+            <label className="space-y-1 text-xs font-medium text-slate-600">
+              Categoría
+              <input
+                type="text"
+                value={category}
+                list="dish-categories"
+                onChange={(e) => setCategory(e.target.value)}
+                disabled={!canManageDishes || saving}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                placeholder="Ej. Menú"
+              />
+              <datalist id="dish-categories">
+                {categoryNames.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </label>
 
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-700">
-                Descripción
-              </label>
+            <label className="space-y-1 text-xs font-medium text-slate-600">
+              Precio de venta
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                disabled={!canManageDishes || saving}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                placeholder="0.00"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs font-medium text-slate-600">
+              Tiempo preparación
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={preparationTime}
+                onChange={(e) => setPreparationTime(e.target.value)}
+                disabled={!canManageDishes || saving}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                placeholder="Minutos"
+              />
+            </label>
+
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={isActive}
+                onChange={(e) => setIsActive(e.target.checked)}
+                disabled={!canManageDishes || saving}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Platillo activo
+            </label>
+
+            <label className="space-y-1 text-xs font-medium text-slate-600 sm:col-span-2">
+              Descripción
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-                placeholder="Breve descripción del platillo…"
+                disabled={!canManageDishes || saving}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                placeholder="Descripción opcional del platillo"
               />
-            </div>
+            </label>
+          </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Precio (S/)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-                  placeholder="0.00"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Tiempo de preparación (min)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={preparationTime}
-                  onChange={(e) => setPreparationTime(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-                  placeholder="Ej: 15"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-5">
-                <input
-                  id="dish-active"
-                  type="checkbox"
-                  checked={isActive}
-                  onChange={(e) => setIsActive(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                />
-                <label
-                  htmlFor="dish-active"
-                  className="text-xs font-medium text-slate-700"
-                >
-                  Platillo activo en la carta
-                </label>
-              </div>
-            </div>
-
-            {/* Ingredientes */}
-            <div className="space-y-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-              <div className="flex items-center justify-between gap-2">
+          <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
                 <p className="text-xs font-semibold text-slate-800">
-                  Ingredientes del platillo
+                  Ingredientes de la receta
                 </p>
-                <button
-                  type="button"
-                  onClick={handleAddIngredient}
-                  disabled={loadingProducts || products.length === 0}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Plus className="h-3 w-3" />
-                  Agregar ingrediente
-                </button>
+                <p className="text-[11px] text-slate-500">
+                  Cada ingrediente representa la cantidad de insumo necesaria
+                  para preparar una unidad del platillo.
+                </p>
               </div>
 
-              {loadingProducts && (
-                <p className="text-[11px] text-slate-400">
-                  Cargando lista de productos…
-                </p>
-              )}
-
-              {!loadingProducts && products.length === 0 && (
-                <p className="text-[11px] text-slate-400">
-                  No hay productos registrados. Primero registra insumos en el
-                  módulo correspondiente.
-                </p>
-              )}
-
-              {!loadingProducts && ingredients.length === 0 && products.length > 0 && (
-                <p className="text-[11px] text-slate-400">
-                  Agrega al menos un ingrediente para este platillo.
-                </p>
-              )}
-
-              {ingredients.length > 0 && (
-                <div className="max-h-56 overflow-auto rounded-lg border border-slate-100 bg-white">
-                  <table className="min-w-full border-collapse text-[11px]">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="border-b border-slate-100 px-2 py-1 text-left font-medium text-slate-600">
-                          Producto
-                        </th>
-                        <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
-                          Cantidad
-                        </th>
-                        <th className="border-b border-slate-100 px-2 py-1 text-left font-medium text-slate-600">
-                          Unidad
-                        </th>
-                        <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
-                          Costo unit.
-                        </th>
-                        <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
-                          Subtotal
-                        </th>
-                        <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
-                          Acciones
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ingredients.map((ing) => {
-                        const subtotal = ing.quantityNeeded * ing.costPerUnit;
-                        return (
-                          <tr key={ing.tempId} className="hover:bg-slate-50/60">
-                            <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
-                              <select
-                                value={ing.productId}
-                                onChange={(e) =>
-                                  handleIngredientChange(
-                                    ing.tempId,
-                                    "productId",
-                                    e.target.value
-                                  )
-                                }
-                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] outline-none ring-blue-500 focus:ring-1"
-                              >
-                                {products.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                              <input
-                                type="number"
-                                min={0}
-                                step="0.001"
-                                value={ing.quantityNeeded}
-                                onChange={(e) =>
-                                  handleIngredientChange(
-                                    ing.tempId,
-                                    "quantityNeeded",
-                                    e.target.value
-                                  )
-                                }
-                                className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-[11px] outline-none ring-blue-500 focus:ring-1"
-                              />
-                            </td>
-                            <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
-                              <input
-                                type="text"
-                                value={ing.unit}
-                                onChange={(e) =>
-                                  handleIngredientChange(
-                                    ing.tempId,
-                                    "unit",
-                                    e.target.value
-                                  )
-                                }
-                                className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] outline-none ring-blue-500 focus:ring-1"
-                              />
-                            </td>
-                            <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                              <input
-                                type="number"
-                                min={0}
-                                step="0.01"
-                                value={ing.costPerUnit}
-                                onChange={(e) =>
-                                  handleIngredientChange(
-                                    ing.tempId,
-                                    "costPerUnit",
-                                    e.target.value
-                                  )
-                                }
-                                className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-[11px] outline-none ring-blue-500 focus:ring-1"
-                              />
-                            </td>
-                            <td className="border-b border-slate-100 px-2 py-1 text-right text-slate-700">
-                              {subtotal ? `S/ ${subtotal.toFixed(2)}` : "S/ 0.00"}
-                            </td>
-                            <td className="border-b border-slate-100 px-2 py-1 text-right">
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveIngredient(ing.tempId)}
-                                className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                Quitar
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {/* BOTÓN GUARDAR */}
-            <div className="flex items-center justify-end gap-2 pt-2">
               <button
-                type="submit"
-                disabled={saving || loadingProducts || products.length === 0}
-                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                onClick={handleAddIngredient}
+                disabled={
+                  !canManageDishes ||
+                  saving ||
+                  loadingProducts ||
+                  products.length === 0
+                }
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {saving ? (
-                  <span className="flex items-center gap-2">
-                    <span className="h-3 w-3 animate-spin rounded-full border border-white border-t-transparent" />
-                    Guardando…
-                  </span>
-                ) : mode === "create" ? (
-                  <span className="flex items-center gap-2">
-                    <Plus className="h-4 w-4" />
-                    Crear platillo
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <Edit className="h-4 w-4" />
-                    Actualizar platillo
-                  </span>
-                )}
+                <Plus className="h-3 w-3" />
+                Agregar
               </button>
             </div>
-          </form>
-        </div>
+
+            {loadingProducts ? (
+              <p className="text-[11px] text-slate-400">
+                Cargando insumos disponibles…
+              </p>
+            ) : products.length === 0 ? (
+              <p className="text-[11px] text-slate-400">
+                No hay insumos activos disponibles. Registra insumos primero.
+              </p>
+            ) : ingredients.length === 0 ? (
+              <p className="text-[11px] text-slate-400">
+                Aún no se agregaron ingredientes a esta receta.
+              </p>
+            ) : (
+              <div className="max-h-72 overflow-auto rounded-lg border border-slate-100 bg-white">
+                <table className="min-w-full border-collapse text-[11px]">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="border-b border-slate-100 px-2 py-1 text-left font-medium text-slate-600">
+                        Insumo
+                      </th>
+                      <th className="border-b border-slate-100 px-2 py-1 text-center font-medium text-slate-600">
+                        Cantidad
+                      </th>
+                      <th className="border-b border-slate-100 px-2 py-1 text-left font-medium text-slate-600">
+                        Unidad
+                      </th>
+                      <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
+                        Costo unit.
+                      </th>
+                      <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
+                        Subtotal
+                      </th>
+                      <th className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-600">
+                        Acción
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {ingredients.map((ingredient) => {
+                      const subtotal =
+                        toNumber(ingredient.quantityNeeded) *
+                        toNumber(ingredient.costPerUnit);
+
+                      return (
+                        <tr
+                          key={ingredient.tempId}
+                          className="hover:bg-slate-50/60"
+                        >
+                          <td className="border-b border-slate-100 px-2 py-1">
+                            <select
+                              value={ingredient.productId}
+                              onChange={(e) =>
+                                handleIngredientChange(
+                                  ingredient.tempId,
+                                  "productId",
+                                  e.target.value
+                                )
+                              }
+                              disabled={!canManageDishes || saving}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                            >
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.name}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          <td className="border-b border-slate-100 px-2 py-1 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.001"
+                              value={ingredient.quantityNeeded}
+                              onChange={(e) =>
+                                handleIngredientChange(
+                                  ingredient.tempId,
+                                  "quantityNeeded",
+                                  e.target.value
+                                )
+                              }
+                              disabled={!canManageDishes || saving}
+                              className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-[11px] outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                            />
+                          </td>
+
+                          <td className="border-b border-slate-100 px-2 py-1">
+                            <input
+                              type="text"
+                              value={ingredient.unitMeasure}
+                              onChange={(e) =>
+                                handleIngredientChange(
+                                  ingredient.tempId,
+                                  "unitMeasure",
+                                  e.target.value
+                                )
+                              }
+                              disabled={!canManageDishes || saving}
+                              className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                            />
+                          </td>
+
+                          <td className="border-b border-slate-100 px-2 py-1 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={ingredient.costPerUnit}
+                              onChange={(e) =>
+                                handleIngredientChange(
+                                  ingredient.tempId,
+                                  "costPerUnit",
+                                  e.target.value
+                                )
+                              }
+                              disabled={!canManageDishes || saving}
+                              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-[11px] outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                            />
+                          </td>
+
+                          <td className="border-b border-slate-100 px-2 py-1 text-right font-medium text-slate-800">
+                            {formatCurrency(subtotal)}
+                          </td>
+
+                          <td className="border-b border-slate-100 px-2 py-1 text-right">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleRemoveIngredient(ingredient.tempId)
+                              }
+                              disabled={!canManageDishes || saving}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Quitar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            <div className="flex items-center justify-between gap-2">
+              <span>Costo estimado de receta:</span>
+              <span className="font-semibold">{formatCurrency(recipeCost)}</span>
+            </div>
+
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span>Margen estimado:</span>
+              <span
+                className={`font-semibold ${
+                  estimatedMargin < 0 ? "text-red-700" : "text-blue-700"
+                }`}
+              >
+                {formatCurrency(estimatedMargin)}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={resetForm}
+              disabled={saving}
+              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+            >
+              Limpiar
+            </button>
+
+            <button
+              type="submit"
+              disabled={!canManageDishes || saving}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <Save className="h-4 w-4" />
+              {saving
+                ? "Guardando..."
+                : mode === "edit"
+                ? "Actualizar platillo"
+                : "Guardar platillo"}
+            </button>
+          </div>
+        </form>
       </div>
     </section>
   );

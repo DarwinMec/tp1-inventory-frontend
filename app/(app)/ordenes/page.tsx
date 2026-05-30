@@ -1,83 +1,106 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  ArrowDownCircle,
-  Search,
+  CalendarDays,
+  CheckCircle2,
+  CircleDollarSign,
+  Filter,
   Package,
-  Truck,
   Plus,
   Receipt,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Truck,
 } from "lucide-react";
-import { apiFetch } from "@/lib/apiClient";
-
-// ===== Tipos alineados al backend =====
-
-type InventoryTransactionDTO = {
-  id?: string;
-  productId: string;
-  productName?: string | null;
-  transactionType: string; // "inbound" | "outbound" | "adjustment"
-  quantity: number;
-  unitCost?: number | null;
-  totalCost?: number | null;
-  supplierId?: string | null;
-  supplierName?: string | null;
-  referenceNumber?: string | null;
-  notes?: string | null;
-  transactionDate?: string | null; // ISO string
-};
-
-type ProductDTO = {
-  id: string;
-  name: string;
-  description?: string | null;
-  unitMeasure: string;
-  minStock?: number | null;
-  maxStock?: number | null;
-  reorderPoint?: number | null;
-  unitCost?: number | null;
-  isActive?: boolean | null;
-  categoryId?: string | null;
-  categoryName?: string | null;
-};
-
-type SupplierDTO = {
-  id?: string;
-  name: string;
-  contactPerson?: string | null;
-  phone?: string | null;
-  email?: string | null;
-  address?: string | null;
-  city?: string | null;
-  region?: string | null;
-  isActive?: boolean | null;
-};
+import { useAuthContext } from "@/context/AuthContext";
+import type {
+  InventoryDTO,
+  InventoryTransactionDTO,
+  ProductDTO,
+  SupplierDTO,
+} from "@/lib/backend-types";
+import {
+  createInventoryTransaction,
+  getInventoryByProduct,
+  getInventoryTransactions,
+  getProducts,
+  getSuppliers,
+} from "@/lib/services";
 
 const PAGE_SIZE = 20;
 
-export default function ComprasPage() {
-  const [transactions, setTransactions] = useState<InventoryTransactionDTO[]>([]);
+function toNumber(value?: number | string | null) {
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function formatCurrency(value?: number | null) {
+  return new Intl.NumberFormat("es-PE", {
+    style: "currency",
+    currency: "PEN",
+  }).format(toNumber(value));
+}
+
+function formatQuantity(value?: number | null) {
+  return toNumber(value).toFixed(3);
+}
+
+function formatDateTime(iso?: string | null) {
+  if (!iso) return "—";
+
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) return iso;
+
+  return date.toLocaleString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export default function AbastecimientoPage() {
+  const { hasRole } = useAuthContext();
+
+  const canManageSupply = hasRole(["ADMIN", "MANAGER"]);
+
+  const [transactions, setTransactions] = useState<InventoryTransactionDTO[]>(
+    []
+  );
   const [products, setProducts] = useState<ProductDTO[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
+
+  const [selectedInventory, setSelectedInventory] =
+    useState<InventoryDTO | null>(null);
 
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  const [loadingSelectedInventory, setLoadingSelectedInventory] =
+    useState(false);
   const [saving, setSaving] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Filtros y paginación
   const [searchTerm, setSearchTerm] = useState("");
+  const [productFilter, setProductFilter] = useState<string>("todos");
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Selección de movimiento para ver detalle (opcional)
-  const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+  const [selectedTransactionId, setSelectedTransactionId] = useState<
+    string | null
+  >(null);
 
-  // ===== Formulario de nueva compra =====
+  const [highlightedProductId, setHighlightedProductId] = useState<
+    string | null
+  >(null);
+
   const [productId, setProductId] = useState<string>("");
   const [supplierId, setSupplierId] = useState<string>("");
   const [quantity, setQuantity] = useState<number>(1);
@@ -85,86 +108,128 @@ export default function ComprasPage() {
   const [referenceNumber, setReferenceNumber] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
-  // ===== Carga inicial =====
-
-  useEffect(() => {
-    const loadTransactions = async () => {
-      try {
-        setLoadingTransactions(true);
-        setError(null);
-
-        // Backend: InventoryTransactionController -> GET /api/inventory/transactions
-        const data = await apiFetch<InventoryTransactionDTO[]>("/inventory/transactions");
-        setTransactions(data ?? []);
-      } catch (e: any) {
-        console.error("Error cargando movimientos de inventario", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los movimientos de compras. Verifica el backend y tus credenciales."
-        );
-      } finally {
-        setLoadingTransactions(false);
-      }
-    };
-
-    loadTransactions();
-  }, []);
-
-  useEffect(() => {
-    const loadProducts = async () => {
-      try {
-        setLoadingProducts(true);
-        const data = await apiFetch<ProductDTO[]>("/products");
-        setProducts((data ?? []).filter((p) => p.isActive !== false));
-      } catch (e: any) {
-        console.error("Error cargando productos para compras", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los productos. Verifica el backend."
-        );
-      } finally {
-        setLoadingProducts(false);
-      }
-    };
-
-    loadProducts();
-  }, []);
-
-  useEffect(() => {
-    const loadSuppliers = async () => {
-      try {
-        setLoadingSuppliers(true);
-        const data = await apiFetch<SupplierDTO[]>("/suppliers");
-        setSuppliers((data ?? []).filter((s) => s.isActive !== false));
-      } catch (e: any) {
-        console.error("Error cargando proveedores para compras", e);
-        setError(
-          e?.message ??
-            "No se pudieron cargar los proveedores. Verifica el backend."
-        );
-      } finally {
-        setLoadingSuppliers(false);
-      }
-    };
-
-    loadSuppliers();
-  }, []);
-
-  const reloadTransactions = async () => {
+  const loadTransactions = useCallback(async () => {
     try {
       setLoadingTransactions(true);
-      const data = await apiFetch<InventoryTransactionDTO[]>("/inventory/transactions");
+      setError(null);
+
+      const data = await getInventoryTransactions();
+
       setTransactions(data ?? []);
-    } catch (e) {
-      console.error("Error recargando movimientos", e);
+    } catch (e: any) {
+      console.error("Error cargando movimientos de inventario", e);
+      setError(
+        e?.message ??
+          "No se pudieron cargar los movimientos de abastecimiento."
+      );
     } finally {
       setLoadingTransactions(false);
     }
-  };
+  }, []);
 
-  // ===== Helpers / derivados =====
+  const loadProducts = useCallback(async () => {
+    try {
+      setLoadingProducts(true);
 
-  // Solo queremos mostrar COMPRAS (transactionType = inbound)
+      const data = await getProducts();
+
+      setProducts((data ?? []).filter((p) => p.isActive !== false));
+    } catch (e: any) {
+      console.error("Error cargando productos", e);
+      setError(e?.message ?? "No se pudieron cargar los insumos.");
+    } finally {
+      setLoadingProducts(false);
+    }
+  }, []);
+
+  const loadSuppliers = useCallback(async () => {
+    try {
+      setLoadingSuppliers(true);
+
+      const data = await getSuppliers();
+
+      setSuppliers((data ?? []).filter((s) => s.isActive !== false));
+    } catch (e: any) {
+      console.error("Error cargando proveedores", e);
+      setError(e?.message ?? "No se pudieron cargar los proveedores.");
+    } finally {
+      setLoadingSuppliers(false);
+    }
+  }, []);
+
+  const loadInventoryBySelectedProduct = useCallback(
+    async (selectedProductId: string) => {
+      if (!selectedProductId) {
+        setSelectedInventory(null);
+        return;
+      }
+
+      try {
+        setLoadingSelectedInventory(true);
+
+        const data = await getInventoryByProduct(selectedProductId);
+
+        setSelectedInventory(data);
+      } catch (e) {
+        console.warn("No se pudo cargar el inventario del producto", e);
+        setSelectedInventory(null);
+      } finally {
+        setLoadingSelectedInventory(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    loadTransactions();
+    loadProducts();
+    loadSuppliers();
+  }, [loadTransactions, loadProducts, loadSuppliers]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const productParam = params.get("productId");
+
+    if (productParam) {
+      setHighlightedProductId(productParam);
+      setProductId(productParam);
+      setProductFilter(productParam);
+      setSearchTerm("");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!productId && products.length > 0) {
+      setProductId(products[0].id);
+      setUnitCost(toNumber(products[0].unitCost));
+    }
+  }, [products, productId]);
+
+  useEffect(() => {
+    if (!productId) return;
+
+    const product = products.find((p) => p.id === productId);
+
+    if (!product) return;
+
+    setUnitCost(toNumber(product.unitCost));
+  }, [productId, products]);
+
+  useEffect(() => {
+    loadInventoryBySelectedProduct(productId);
+  }, [productId, loadInventoryBySelectedProduct]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, productFilter]);
+
+  const selectedProduct = useMemo(
+    () => products.find((p) => p.id === productId) ?? null,
+    [products, productId]
+  );
+
   const inboundTransactions = useMemo(
     () =>
       (transactions ?? []).filter(
@@ -173,12 +238,13 @@ export default function ComprasPage() {
     [transactions]
   );
 
-  // KPIs
   const totalPurchases = inboundTransactions.length;
+
   const totalSpent = inboundTransactions.reduce((acc, t) => {
-    const qty = t.quantity ?? 0;
-    const uc = t.unitCost ?? 0;
-    const tc = t.totalCost ?? qty * uc;
+    const qty = toNumber(t.quantity);
+    const uc = toNumber(t.unitCost);
+    const tc = t.totalCost != null ? toNumber(t.totalCost) : qty * uc;
+
     return acc + tc;
   }, 0);
 
@@ -188,6 +254,7 @@ export default function ComprasPage() {
         .map((t) => t.supplierId)
         .filter((id): id is string => Boolean(id))
     );
+
     return set.size;
   }, [inboundTransactions]);
 
@@ -197,19 +264,19 @@ export default function ComprasPage() {
         .map((t) => t.productId)
         .filter((id): id is string => Boolean(id))
     );
+
     return set.size;
   }, [inboundTransactions]);
-
-  // Filtrado + paginación
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm]);
 
   const filteredTransactions = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
 
     return inboundTransactions
       .filter((t) => {
+        if (productFilter !== "todos" && t.productId !== productFilter) {
+          return false;
+        }
+
         if (!term) return true;
 
         const productName = (t.productName ?? "").toLowerCase();
@@ -229,9 +296,10 @@ export default function ComprasPage() {
       .sort((a, b) => {
         const aKey = a.transactionDate ?? "";
         const bKey = b.transactionDate ?? "";
+
         return bKey.localeCompare(aKey);
       });
-  }, [inboundTransactions, searchTerm]);
+  }, [inboundTransactions, searchTerm, productFilter]);
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE)),
@@ -241,6 +309,7 @@ export default function ComprasPage() {
   const paginatedTransactions = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
     const end = start + PAGE_SIZE;
+
     return filteredTransactions.slice(start, end);
   }, [filteredTransactions, currentPage]);
 
@@ -250,71 +319,63 @@ export default function ComprasPage() {
     [filteredTransactions, selectedTransactionId]
   );
 
-  const formatDateTime = (iso?: string | null) => {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString("es-PE", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  const formTotal = useMemo(
+    () => toNumber(quantity) * toNumber(unitCost),
+    [quantity, unitCost]
+  );
 
   const resetForm = () => {
-    setProductId(products[0]?.id ?? "");
+    const defaultProductId = highlightedProductId ?? products[0]?.id ?? "";
+
+    setProductId(defaultProductId);
     setSupplierId("");
     setQuantity(1);
-    setUnitCost(products[0]?.unitCost ?? 0);
+
+    const product = products.find((p) => p.id === defaultProductId);
+
+    setUnitCost(toNumber(product?.unitCost));
     setReferenceNumber("");
     setNotes("");
     setError(null);
     setSuccessMessage(null);
   };
 
-  // Inicializar valores por defecto cuando se cargan productos
-  useEffect(() => {
-    if (!productId && products.length > 0) {
-      setProductId(products[0].id);
-      setUnitCost(products[0].unitCost ?? 0);
+  const clearHighlightedProduct = () => {
+    setHighlightedProductId(null);
+    setProductFilter("todos");
+
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/ordenes");
     }
-  }, [products, productId]);
+  };
 
-  // Cada vez que cambia el producto seleccionado, actualizar unitCost y quizá notas
-  useEffect(() => {
-    if (!productId) return;
-    const prod = products.find((p) => p.id === productId);
-    if (!prod) return;
-    setUnitCost(prod.unitCost ?? 0);
-  }, [productId, products]);
-
-  const formTotal = useMemo(
-    () => (quantity || 0) * (unitCost || 0),
-    [quantity, unitCost]
-  );
-
-  // ===== Manejo de envío =====
-
-  const validateForm = (): boolean => {
-    if (!productId) {
-      setError("Selecciona un producto para registrar la compra.");
+  const validateForm = () => {
+    if (!canManageSupply) {
+      setError("Tu rol no tiene permisos para registrar abastecimiento.");
       return false;
     }
+
+    if (!productId) {
+      setError("Selecciona un insumo para registrar el ingreso.");
+      return false;
+    }
+
     if (quantity <= 0) {
       setError("La cantidad debe ser mayor a 0.");
       return false;
     }
+
     if (unitCost < 0) {
       setError("El costo unitario no puede ser negativo.");
       return false;
     }
+
     return true;
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+
     setError(null);
     setSuccessMessage(null);
 
@@ -323,31 +384,36 @@ export default function ComprasPage() {
     try {
       setSaving(true);
 
-      // transactionType fijo a "inbound" (compra)
       const body: Partial<InventoryTransactionDTO> = {
         productId,
         supplierId: supplierId || undefined,
         transactionType: "inbound",
         quantity,
         unitCost,
-        referenceNumber: referenceNumber || undefined,
-        notes: notes || undefined,
-        // transactionDate: lo dejamos null para que el backend asigne ahora
+        referenceNumber: referenceNumber.trim() || undefined,
+        notes: notes.trim() || undefined,
       };
 
-      await apiFetch<InventoryTransactionDTO>("/inventory/transactions", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      await createInventoryTransaction(body);
 
-      setSuccessMessage("Compra registrada correctamente.");
-      await reloadTransactions();
-      resetForm();
+      setSuccessMessage(
+        "Ingreso de abastecimiento registrado correctamente. El stock del insumo fue actualizado."
+      );
+
+      await loadTransactions();
+
+      if (productId) {
+        await loadInventoryBySelectedProduct(productId);
+      }
+
+      setQuantity(1);
+      setReferenceNumber("");
+      setNotes("");
     } catch (e: any) {
-      console.error("Error registrando compra", e);
+      console.error("Error registrando abastecimiento", e);
       setError(
         e?.message ??
-          "Ocurrió un error al registrar la compra. Verifica el backend y los datos ingresados."
+          "Ocurrió un error al registrar el abastecimiento. Verifica los datos ingresados."
       );
     } finally {
       setSaving(false);
@@ -356,45 +422,101 @@ export default function ComprasPage() {
 
   return (
     <section className="space-y-6">
-      {/* ENCABEZADO */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-            <ArrowDownCircle className="h-3 w-3" />
-            <span>Movimientos de inventario · Compras</span>
+          <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+            <Sparkles className="h-3 w-3" />
+            <span>Módulo de abastecimiento</span>
           </div>
+
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-            Compras de insumos (ingresos al inventario)
+            Abastecimiento de insumos
           </h1>
+
           <p className="mt-1 max-w-2xl text-sm text-slate-500">
-            Registra ingresos de productos al inventario (compras a proveedores)
-            y revisa el historial de movimientos de tipo <b>inbound</b>.
+            Registra ingresos de inventario por compras o reposiciones de
+            insumos. Cada registro genera un movimiento <b>inbound</b> y
+            actualiza el stock disponible.
           </p>
         </div>
 
-        {error && (
-          <div className="flex max-w-xs items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
-            <p>{error}</p>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            loadTransactions();
+            loadProducts();
+            loadSuppliers();
+
+            if (productId) {
+              loadInventoryBySelectedProduct(productId);
+            }
+          }}
+          disabled={loadingTransactions || loadingProducts || loadingSuppliers}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${
+              loadingTransactions || loadingProducts || loadingSuppliers
+                ? "animate-spin"
+                : ""
+            }`}
+          />
+          Actualizar
+        </button>
       </header>
 
-      {/* TARJETAS RESUMEN */}
+      {highlightedProductId && (
+        <div className="flex flex-col gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+            <p>
+              Llegaste a este módulo desde una alerta. El sistema ha
+              preseleccionado el insumo relacionado para registrar su reposición.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={clearHighlightedProduct}
+            className="rounded-lg border border-blue-200 bg-white px-3 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100"
+          >
+            Ver todos los abastecimientos
+          </button>
+        </div>
+      )}
+
+      {(error || successMessage) && (
+        <div
+          className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+            error
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {error ? (
+            <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+          ) : (
+            <CheckCircle2 className="mt-[2px] h-3.5 w-3.5" />
+          )}
+          <p>{error ?? successMessage}</p>
+        </div>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-4">
         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100">
             <Receipt className="h-5 w-5 text-slate-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
-              Compras registradas
+              Ingresos registrados
             </span>
             <span className="text-lg font-semibold text-slate-900">
               {loadingTransactions ? "…" : totalPurchases}
             </span>
             <span className="text-[11px] text-slate-400">
-              Movimientos de inventario de tipo inbound.
+              Movimientos inbound.
             </span>
           </div>
         </div>
@@ -403,15 +525,16 @@ export default function ComprasPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
             <Package className="h-5 w-5 text-emerald-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
-              Productos distintos
+              Insumos abastecidos
             </span>
             <span className="text-lg font-semibold text-slate-900">
               {loadingTransactions ? "…" : distinctProducts}
             </span>
             <span className="text-[11px] text-slate-400">
-              Insumos diferentes con compras registradas.
+              Productos con ingresos.
             </span>
           </div>
         </div>
@@ -420,82 +543,100 @@ export default function ComprasPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
             <Truck className="h-5 w-5 text-blue-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
-              Proveedores involucrados
+              Proveedores usados
             </span>
             <span className="text-lg font-semibold text-slate-900">
               {loadingTransactions ? "…" : distinctSuppliers}
             </span>
             <span className="text-[11px] text-slate-400">
-              Proveedores usados en las compras registradas.
+              Asociados a ingresos.
             </span>
           </div>
         </div>
 
         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-50">
-            <ArrowDownCircle className="h-5 w-5 text-amber-700" />
+            <CircleDollarSign className="h-5 w-5 text-amber-700" />
           </div>
+
           <div className="flex flex-col">
             <span className="text-xs font-medium text-slate-500">
-              Monto total comprado
+              Monto abastecido
             </span>
             <span className="text-lg font-semibold text-slate-900">
-              {loadingTransactions ? "…" : `S/ ${totalSpent.toFixed(2)}`}
+              {loadingTransactions ? "…" : formatCurrency(totalSpent)}
             </span>
             <span className="text-[11px] text-slate-400">
-              Suma de los montos (totalCost) de las compras inbound.
+              Costo total acumulado.
             </span>
           </div>
         </div>
       </div>
 
-      {/* CONTENIDO PRINCIPAL: HISTORIAL + FORM */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
-        {/* HISTORIAL DE COMPRAS */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1.05fr)]">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Historial de compras (inbound)
+                Historial de abastecimiento
               </h2>
               <p className="text-xs text-slate-500">
-                Movimientos de entrada de productos al inventario.
+                Movimientos de entrada de insumos al inventario.
               </p>
             </div>
 
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por producto, proveedor, fecha o ref…"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-72 rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
-              />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por producto, proveedor o ref…"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1 sm:w-72"
+                />
+              </div>
+
+              <div className="relative">
+                <Filter className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <select
+                  value={productFilter}
+                  onChange={(e) => setProductFilter(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1 sm:w-64"
+                >
+                  <option value="todos">Todos los insumos</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
           {loadingTransactions ? (
-            <div className="flex min-h-[220px] items-center justify-center text-xs text-slate-500">
-              Cargando movimientos de compras…
+            <div className="flex min-h-[280px] items-center justify-center text-xs text-slate-500">
+              Cargando movimientos de abastecimiento…
             </div>
           ) : filteredTransactions.length === 0 ? (
-            <div className="flex min-h-[220px] items-center justify-center text-xs text-slate-500">
-              No se encontraron compras con los filtros aplicados.
+            <div className="flex min-h-[280px] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+              No se encontraron movimientos con los filtros aplicados.
             </div>
           ) : (
             <>
-              <div className="max-h-[360px] overflow-auto rounded-xl border border-slate-100">
+              <div className="max-h-[410px] overflow-auto rounded-xl border border-slate-100">
                 <table className="min-w-full border-collapse text-[11px]">
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
-                        Fecha / hora
+                        Fecha
                       </th>
                       <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
-                        Producto
+                        Insumo
                       </th>
                       <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
                         Proveedor
@@ -504,40 +645,61 @@ export default function ComprasPage() {
                         Cantidad
                       </th>
                       <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
-                        Costo total
+                        Total
                       </th>
                       <th className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-600">
                         Ref.
                       </th>
                     </tr>
                   </thead>
+
                   <tbody>
                     {paginatedTransactions.map((t) => {
-                      const qty = t.quantity ?? 0;
-                      const uc = t.unitCost ?? 0;
-                      const total = t.totalCost ?? qty * uc;
+                      const qty = toNumber(t.quantity);
+                      const total =
+                        t.totalCost != null
+                          ? toNumber(t.totalCost)
+                          : qty * toNumber(t.unitCost);
+
+                      const highlighted = t.productId === highlightedProductId;
 
                       return (
                         <tr
                           key={t.id ?? `${t.productId}-${t.transactionDate}`}
-                          className="hover:bg-slate-50/60 cursor-pointer"
+                          className={`cursor-pointer hover:bg-slate-50/70 ${
+                            highlighted ? "bg-blue-50/70" : ""
+                          }`}
                           onClick={() => setSelectedTransactionId(t.id ?? null)}
                         >
                           <td className="border-b border-slate-100 px-3 py-2 text-slate-800">
                             {formatDateTime(t.transactionDate)}
                           </td>
+
                           <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
-                            {t.productName ?? "—"}
+                            <div className="flex flex-col">
+                              <span className="font-medium">
+                                {t.productName ?? "—"}
+                              </span>
+                              {highlighted && (
+                                <span className="text-[10px] font-medium text-blue-600">
+                                  Relacionado con alerta
+                                </span>
+                              )}
+                            </div>
                           </td>
+
                           <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
                             {t.supplierName ?? "—"}
                           </td>
+
                           <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-800">
-                            {qty.toFixed(3)}
+                            {formatQuantity(qty)}
                           </td>
-                          <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-800">
-                            {`S/ ${total.toFixed(2)}`}
+
+                          <td className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-800">
+                            {formatCurrency(total)}
                           </td>
+
                           <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-700">
                             {t.referenceNumber ?? "—"}
                           </td>
@@ -548,7 +710,6 @@ export default function ComprasPage() {
                 </table>
               </div>
 
-              {/* PAGINACIÓN */}
               <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
                 <span>
                   Mostrando{" "}
@@ -559,7 +720,7 @@ export default function ComprasPage() {
                   <span className="font-semibold">
                     {filteredTransactions.length}
                   </span>{" "}
-                  compras
+                  movimientos
                 </span>
 
                 <div className="inline-flex items-center gap-1">
@@ -567,42 +728,44 @@ export default function ComprasPage() {
                     type="button"
                     disabled={currentPage === 1}
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50"
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Anterior
                   </button>
+
                   <span>
-                    Página{" "}
-                    <span className="font-semibold">{currentPage}</span> de{" "}
-                    <span className="font-semibold">{totalPages}</span>
+                    Página <span className="font-semibold">{currentPage}</span>{" "}
+                    de <span className="font-semibold">{totalPages}</span>
                   </span>
+
                   <button
                     type="button"
                     disabled={currentPage === totalPages}
                     onClick={() =>
                       setCurrentPage((p) => Math.min(totalPages, p + 1))
                     }
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50"
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Siguiente
                   </button>
                 </div>
               </div>
 
-              {/* DETALLE SELECCIONADO */}
               {selectedTransaction && (
                 <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold text-slate-800">
-                        Detalle de la compra seleccionada
+                        Detalle del ingreso seleccionado
                       </p>
                       <p className="text-[11px] text-slate-500">
                         {formatDateTime(selectedTransaction.transactionDate)} ·{" "}
-                        {selectedTransaction.productName ?? "Producto"} ·{" "}
-                        {selectedTransaction.supplierName ?? "Proveedor sin nombre"}
+                        {selectedTransaction.productName ?? "Insumo"} ·{" "}
+                        {selectedTransaction.supplierName ??
+                          "Proveedor no registrado"}
                       </p>
                     </div>
+
                     <button
                       type="button"
                       onClick={() => setSelectedTransactionId(null)}
@@ -614,37 +777,39 @@ export default function ComprasPage() {
 
                   <div className="grid gap-2 text-[11px] text-slate-700 sm:grid-cols-2">
                     <p>
-                      <span className="font-semibold">Producto:</span>{" "}
+                      <span className="font-semibold">Insumo:</span>{" "}
                       {selectedTransaction.productName ?? "—"}
                     </p>
+
                     <p>
                       <span className="font-semibold">Proveedor:</span>{" "}
                       {selectedTransaction.supplierName ?? "—"}
                     </p>
+
                     <p>
                       <span className="font-semibold">Cantidad:</span>{" "}
-                      {selectedTransaction.quantity?.toFixed(3) ?? "—"}
+                      {formatQuantity(selectedTransaction.quantity)}
                     </p>
+
                     <p>
                       <span className="font-semibold">Costo unitario:</span>{" "}
-                      {selectedTransaction.unitCost != null
-                        ? `S/ ${selectedTransaction.unitCost.toFixed(2)}`
-                        : "—"}
+                      {formatCurrency(selectedTransaction.unitCost)}
                     </p>
+
                     <p>
                       <span className="font-semibold">Total:</span>{" "}
-                      {(() => {
-                        const qty = selectedTransaction.quantity ?? 0;
-                        const uc = selectedTransaction.unitCost ?? 0;
-                        const total =
-                          selectedTransaction.totalCost ?? qty * uc;
-                        return `S/ ${total.toFixed(2)}`;
-                      })()}
+                      {formatCurrency(
+                        selectedTransaction.totalCost ??
+                          toNumber(selectedTransaction.quantity) *
+                            toNumber(selectedTransaction.unitCost)
+                      )}
                     </p>
+
                     <p>
                       <span className="font-semibold">Referencia:</span>{" "}
                       {selectedTransaction.referenceNumber ?? "—"}
                     </p>
+
                     <p className="sm:col-span-2">
                       <span className="font-semibold">Notas:</span>{" "}
                       {selectedTransaction.notes ?? "—"}
@@ -656,16 +821,15 @@ export default function ComprasPage() {
           )}
         </div>
 
-        {/* FORMULARIO: NUEVA COMPRA */}
         <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Registrar nueva compra (inbound)
+                Registrar ingreso de abastecimiento
               </h2>
               <p className="text-xs text-slate-500">
-                Selecciona el producto, proveedor y cantidades para registrar un
-                ingreso de inventario.
+                Selecciona el insumo, proveedor y cantidad comprada para
+                actualizar el inventario.
               </p>
             </div>
 
@@ -678,31 +842,32 @@ export default function ComprasPage() {
             </button>
           </div>
 
-          {successMessage && (
-            <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-              <ArrowDownCircle className="mt-[2px] h-3.5 w-3.5" />
-              <p>{successMessage}</p>
+          {!canManageSupply && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Tu rol solo permite consultar abastecimiento. No puedes registrar
+              nuevos ingresos.
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Producto / Proveedor */}
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)]">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Producto
-                </label>
+            <div className="grid gap-3">
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Insumo
                 <select
                   value={productId}
-                  onChange={(e) => setProductId(e.target.value)}
+                  onChange={(e) => {
+                    setProductId(e.target.value);
+                    setProductFilter(e.target.value || "todos");
+                  }}
                   disabled={loadingProducts || products.length === 0}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                 >
                   <option value="">
                     {loadingProducts
-                      ? "Cargando productos…"
-                      : "Selecciona un producto…"}
+                      ? "Cargando insumos…"
+                      : "Selecciona un insumo…"}
                   </option>
+
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -710,140 +875,169 @@ export default function ComprasPage() {
                     </option>
                   ))}
                 </select>
-              </div>
+              </label>
 
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Proveedor (opcional)
-                </label>
+              {selectedProduct && (
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-[11px] text-slate-600">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-800">
+                      Estado actual del insumo
+                    </span>
+                    {loadingSelectedInventory && (
+                      <span className="text-slate-400">Actualizando…</span>
+                    )}
+                  </div>
+
+                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                    <p>
+                      <span className="block text-slate-400">Stock actual</span>
+                      <span className="font-semibold text-slate-800">
+                        {formatQuantity(selectedInventory?.currentStock)}{" "}
+                        {selectedProduct.unitMeasure}
+                      </span>
+                    </p>
+
+                    <p>
+                      <span className="block text-slate-400">Disponible</span>
+                      <span className="font-semibold text-slate-800">
+                        {formatQuantity(selectedInventory?.availableStock)}{" "}
+                        {selectedProduct.unitMeasure}
+                      </span>
+                    </p>
+
+                    <p>
+                      <span className="block text-slate-400">Stock mínimo</span>
+                      <span className="font-semibold text-slate-800">
+                        {formatQuantity(selectedProduct.minStock)}{" "}
+                        {selectedProduct.unitMeasure}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Proveedor
                 <div className="relative">
                   <Truck className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                   <select
                     value={supplierId}
                     onChange={(e) => setSupplierId(e.target.value)}
                     disabled={loadingSuppliers || suppliers.length === 0}
-                    className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
+                    className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                   >
                     <option value="">
                       {loadingSuppliers
                         ? "Cargando proveedores…"
-                        : "Sin proveedor (opcional)…"}
+                        : "Sin proveedor registrado"}
                     </option>
+
                     {suppliers.map((s) => (
-                      <option key={s.id ?? s.name} value={s.id}>
+                      <option key={s.id ?? s.name} value={s.id ?? ""}>
                         {s.name}
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
+              </label>
             </div>
 
-            {/* Cantidad / costo */}
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Cantidad
-                </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Cantidad comprada
                 <input
                   type="number"
                   min={0}
                   step="0.001"
                   value={quantity}
+                  disabled={!canManageSupply}
                   onChange={(e) => setQuantity(Number(e.target.value) || 0)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                 />
-                <p className="text-[11px] text-slate-400">
-                  Usa la misma unidad de medida definida para el producto.
-                </p>
-              </div>
+              </label>
 
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Costo unitario (S/)
-                </label>
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Costo unitario S/
                 <input
                   type="number"
                   min={0}
                   step="0.01"
                   value={unitCost}
+                  disabled={!canManageSupply}
                   onChange={(e) => setUnitCost(Number(e.target.value) || 0)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                 />
-                <p className="text-[11px] text-slate-400">
-                  Si lo dejas en 0, el total también quedará en 0. Lo ideal es usar el costo real.
-                </p>
-              </div>
+              </label>
             </div>
 
-            {/* Referencia / notas */}
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.4fr)]">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  N° de documento / referencia
-                </label>
+            <div className="grid gap-3">
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Documento / referencia
                 <input
                   type="text"
                   value={referenceNumber}
+                  disabled={!canManageSupply}
                   onChange={(e) => setReferenceNumber(e.target.value)}
-                  placeholder="Ej: FAC-00123, BOLETA-567, OC-2025-01…"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  placeholder="Ej. FAC-00123, BOLETA-567, OC-2026-01"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                 />
-              </div>
+              </label>
 
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-700">
-                  Notas (opcional)
-                </label>
+              <label className="space-y-1 text-xs font-medium text-slate-700">
+                Notas
                 <textarea
                   value={notes}
+                  disabled={!canManageSupply}
                   onChange={(e) => setNotes(e.target.value)}
                   rows={2}
-                  placeholder="Observaciones sobre la compra, condiciones, etc."
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+                  placeholder="Observaciones sobre la compra o reposición."
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal outline-none ring-blue-500 focus:ring-1 disabled:bg-slate-50 disabled:text-slate-400"
                 />
-              </div>
+              </label>
             </div>
 
-            {/* Resumen */}
             <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-              <p className="text-xs font-semibold text-slate-800">
-                Resumen de la compra
-              </p>
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-slate-500" />
+                <p className="text-xs font-semibold text-slate-800">
+                  Resumen del ingreso
+                </p>
+              </div>
+
               <p className="mt-1 text-[11px] text-slate-500">
-                El total final también se valida y calcula en el backend usando
-                cantidad y costo unitario.
+                El backend registrará la fecha actual y actualizará el stock
+                del insumo seleccionado.
               </p>
 
               <div className="mt-3 flex items-center justify-between text-sm">
                 <span className="text-slate-700">Total estimado:</span>
                 <span className="font-semibold text-slate-900">
-                  S/ {formTotal.toFixed(2)}
+                  {formatCurrency(formTotal)}
                 </span>
               </div>
             </div>
 
-            {/* BOTÓN GUARDAR */}
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="submit"
                 disabled={
                   saving ||
+                  !canManageSupply ||
                   loadingProducts ||
                   products.length === 0
                 }
-                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {saving ? (
-                  <span className="flex items-center gap-2">
+                  <>
                     <span className="h-3 w-3 animate-spin rounded-full border border-white border-t-transparent" />
-                    Registrando compra…
-                  </span>
+                    Registrando…
+                  </>
                 ) : (
-                  <span className="flex items-center gap-2">
-                    <ArrowDownCircle className="h-4 w-4" />
-                    Registrar compra
-                  </span>
+                  <>
+                    <Plus className="h-4 w-4" />
+                    Registrar abastecimiento
+                  </>
                 )}
               </button>
             </div>

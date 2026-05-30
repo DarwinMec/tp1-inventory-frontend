@@ -2,7 +2,6 @@
 import { AuthUser, UserRole } from "@/lib/types";
 
 export interface LoginParams {
-  // seguimos usando "email" si tu formulario de login pide correo
   email: string;
   password: string;
 }
@@ -24,6 +23,19 @@ interface UserDTO {
   createdAt?: string;
 }
 
+export function normalizeRole(role?: string | null): UserRole {
+  const cleanRole = (role ?? "")
+    .replace("ROLE_", "")
+    .trim()
+    .toUpperCase();
+
+  if (cleanRole === "ADMIN") return "ADMIN";
+  if (cleanRole === "MANAGER") return "MANAGER";
+  if (cleanRole === "EMPLOYEE") return "EMPLOYEE";
+
+  return "EMPLOYEE";
+}
+
 async function fetchMe(token: string): Promise<UserDTO> {
   const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
     headers: {
@@ -39,8 +51,7 @@ async function fetchMe(token: string): Promise<UserDTO> {
   return (await res.json()) as UserDTO;
 }
 
-// ⬇️ este "loginMock" ahora hace login REAL contra tu backend
-export async function loginMock({
+export async function loginWithBackend({
   email,
   password,
 }: LoginParams): Promise<AuthUser | null> {
@@ -51,7 +62,6 @@ export async function loginMock({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        // si tu backend espera "username", usamos el email como username
         username: email,
         password,
       }),
@@ -63,7 +73,6 @@ export async function loginMock({
 
     const { token } = (await loginRes.json()) as AuthResponse;
 
-    // Pedimos los datos del usuario autenticado
     const me = await fetchMe(token);
 
     const user: AuthUser = {
@@ -71,7 +80,7 @@ export async function loginMock({
       username: me.username,
       email: me.email,
       fullName: me.fullName ?? me.username,
-      role: me.role as UserRole,
+      role: normalizeRole(me.role),
       token,
     };
 
@@ -81,6 +90,9 @@ export async function loginMock({
     return null;
   }
 }
+
+// Alias temporal para no romper imports antiguos
+export const loginMock = loginWithBackend;
 
 export function hasRole(userRole: UserRole, allowedRoles: UserRole[]): boolean {
   return allowedRoles.includes(userRole);

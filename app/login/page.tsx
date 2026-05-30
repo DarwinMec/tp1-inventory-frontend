@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const { isAuthenticated, login } = useAuth();
+  const { isAuthenticated, isAuthLoading, login } = useAuth();
   const router = useRouter();
 
   const {
@@ -26,10 +26,10 @@ export default function LoginPage() {
   });
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (!isAuthLoading && isAuthenticated) {
       router.push("/dashboard");
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthLoading, isAuthenticated, router]);
 
   const onSubmit = async (data: LoginSchema) => {
     // 🔹 Aquí hacemos el mapeo username -> email para que coincida con LoginParams
