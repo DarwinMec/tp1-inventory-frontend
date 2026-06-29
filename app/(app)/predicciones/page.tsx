@@ -1,6 +1,9 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   LineChart as LineChartIcon,
   Sparkles,
@@ -44,6 +47,7 @@ import {
 } from "@/lib/services";
 
 type ViewMode = "byDish" | "weekly";
+type ExportFormat = "excel" | "pdf";
 
 function toNumber(value?: number | string | null) {
   if (value == null) return 0;
@@ -124,6 +128,11 @@ export default function PrediccionesPage() {
   const [weeklyHorizon, setWeeklyHorizon] = useState<number>(1);
   const [loadingWeeklyPlan, setLoadingWeeklyPlan] = useState(false);
   const [weeklyError, setWeeklyError] = useState<string | null>(null);
+
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("excel");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportSuccess, setExportSuccess] = useState<string | null>(null);
 
   const loadActiveModelInfo = useCallback(async () => {
     try {
@@ -375,6 +384,275 @@ export default function PrediccionesPage() {
         .length ?? 0,
     [weeklyPlan]
   );
+
+  const buildPredictionExportRows = (): Record<string, string | number>[] => {
+    if (viewMode === "byDish") {
+      return (predictions ?? []).map((prediction, index) => ({
+        "#": index + 1,
+        Platillo: prediction.dishName ?? selectedDish?.name ?? "—",
+        Semana: prediction.weekStart ?? "—",
+        "Demanda predicha": Number(toNumber(prediction.predictedDemand).toFixed(2)),
+        Confianza: prediction.confidence ?? "—",
+      }));
+    }
+
+    return (weeklyPlan?.dishes ?? []).map((prediction, index) => ({
+      "#": index + 1,
+      Platillo: prediction.dishName ?? "—",
+      Semana: prediction.weekStart ?? weeklyPlan?.weekStart ?? "—",
+      "Demanda predicha": Number(toNumber(prediction.predictedDemand).toFixed(2)),
+      Confianza: prediction.confidence ?? "—",
+    }));
+  };
+
+  const buildSupplyExportRows = (): Record<string, string | number>[] => {
+    if (viewMode === "byDish") {
+      return ingredientTotals.map((ingredient, index) => ({
+        "#": index + 1,
+        Insumo: ingredient.productName ?? "—",
+        Unidad: ingredient.unit ?? "—",
+        "Cantidad por plato": Number(ingredient.perDish.toFixed(3)),
+        "Total requerido": Number(ingredient.totalQuantity.toFixed(3)),
+      }));
+    }
+
+    return (weeklyPlan?.supplies ?? []).map((supply, index) => ({
+      "#": index + 1,
+      Insumo: supply.productName ?? "—",
+      Unidad: supply.unitMeasure ?? "—",
+      Requerido: Number(toNumber(supply.totalRequired).toFixed(3)),
+      "Stock actual": Number(toNumber(supply.currentStock).toFixed(3)),
+      Disponible: Number(toNumber(supply.availableStock).toFixed(3)),
+      "Cantidad a comprar": Number(toNumber(supply.quantityToBuy).toFixed(3)),
+    }));
+  };
+
+  const exportToExcel = () => {
+    const predictionRows = buildPredictionExportRows();
+    const supplyRows = buildSupplyExportRows();
+
+    if (predictionRows.length === 0) {
+      throw new Error("No hay predicciones disponibles para exportar.");
+    }
+
+    const workbook = XLSX.utils.book_new();
+
+    const summaryRows = [
+      ["Reporte", "Predicciones de demanda"],
+      ["Fecha de exportación", new Date().toLocaleString("es-PE")],
+      [
+        "Modo",
+        viewMode === "byDish"
+          ? "Predicción por platillo"
+          : "Predicción global semanal",
+      ],
+      ["Platillo seleccionado", selectedDish?.name ?? "—"],
+      ["Total de predicciones", predictionRows.length],
+      [
+        "Demanda total estimada",
+        viewMode === "byDish"
+          ? Number(totalPredicted.toFixed(2))
+          : Number(totalWeeklyDemand.toFixed(2)),
+      ],
+    ];
+
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumen");
+
+    const predictionsSheet = XLSX.utils.json_to_sheet(predictionRows);
+    XLSX.utils.book_append_sheet(workbook, predictionsSheet, "Predicciones");
+
+    if (supplyRows.length > 0) {
+      const suppliesSheet = XLSX.utils.json_to_sheet(supplyRows);
+      XLSX.utils.book_append_sheet(workbook, suppliesSheet, "Insumos");
+    }
+
+    const filename = `predicciones_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    XLSX.writeFile(workbook, filename);
+  };
+
+  const exportToPdf = () => {
+    const predictionRows = buildPredictionExportRows();
+    const supplyRows = buildSupplyExportRows();
+
+    if (predictionRows.length === 0) {
+      throw new Error("No hay predicciones disponibles para exportar.");
+    }
+
+    const doc = new jsPDF();
+
+    doc.setFontSize(14);
+    doc.text("Reporte de predicciones de demanda", 14, 16);
+
+    doc.setFontSize(10);
+    doc.text(`Fecha de exportación: ${new Date().toLocaleString("es-PE")}`, 14, 24);
+    doc.text(
+      `Modo: ${
+        viewMode === "byDish"
+          ? "Predicción por platillo"
+          : "Predicción global semanal"
+      }`,
+      14,
+      30
+    );
+
+    if (viewMode === "byDish" && selectedDish?.name) {
+      doc.text(`Platillo: ${selectedDish.name}`, 14, 36);
+    }
+
+    autoTable(doc, {
+      startY: viewMode === "byDish" && selectedDish?.name ? 44 : 38,
+      head: [["#", "Platillo", "Semana", "Demanda predicha", "Confianza"]],
+      body: predictionRows.map((row) => [
+        row["#"],
+        row["Platillo"],
+        row["Semana"],
+        row["Demanda predicha"],
+        row["Confianza"],
+      ]),
+    });
+
+    if (supplyRows.length > 0) {
+      const nextStartY = ((doc as any).lastAutoTable?.finalY ?? 38) + 10;
+
+      autoTable(doc, {
+        startY: nextStartY,
+        head:
+          viewMode === "byDish"
+            ? [["#", "Insumo", "Unidad", "Por plato", "Total requerido"]]
+            : [["#", "Insumo", "Unidad", "Requerido", "Stock", "A comprar"]],
+        body:
+          viewMode === "byDish"
+            ? supplyRows.map((row) => [
+                row["#"],
+                row["Insumo"],
+                row["Unidad"],
+                row["Cantidad por plato"],
+                row["Total requerido"],
+              ])
+            : supplyRows.map((row) => [
+                row["#"],
+                row["Insumo"],
+                row["Unidad"],
+                row["Requerido"],
+                row["Stock actual"],
+                row["Cantidad a comprar"],
+              ]),
+      });
+    }
+
+    const filename = `predicciones_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+    doc.save(filename);
+  };
+
+  const handleExportPredictions = async () => {
+    try {
+      setExporting(true);
+      setExportError(null);
+      setExportSuccess(null);
+
+      const predictionRows = buildPredictionExportRows();
+
+      if (predictionRows.length === 0) {
+        throw new Error("No hay predicciones disponibles para exportar.");
+      }
+
+      if (exportFormat === "excel") {
+        exportToExcel();
+      } else {
+        exportToPdf();
+      }
+
+      setExportSuccess(
+        exportFormat === "excel"
+          ? "Archivo Excel exportado correctamente."
+          : "Archivo PDF exportado correctamente."
+      );
+    } catch (e: any) {
+      console.error("Error exportando predicciones", e);
+
+      const exportLog = {
+        module: "predicciones",
+        action: "export_predictions",
+        format: exportFormat,
+        error: e?.message ?? "Error desconocido",
+        createdAt: new Date().toISOString(),
+      };
+
+      localStorage.setItem(
+        "lastPredictionExportError",
+        JSON.stringify(exportLog)
+      );
+
+      setExportError("No se pudo exportar el archivo, intente nuevamente.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const hasExportablePredictions =
+    viewMode === "byDish"
+      ? Boolean(predictions && predictions.length > 0)
+      : Boolean(weeklyPlan?.dishes && weeklyPlan.dishes.length > 0);
+
+  const exportPanel = hasExportablePredictions ? (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">
+            Exportar predicciones
+          </h2>
+          <p className="text-xs text-slate-500">
+            Selecciona el formato de exportación para descargar los resultados
+            visibles de la predicción.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <select
+            value={exportFormat}
+            onChange={(event) =>
+              setExportFormat(event.target.value as ExportFormat)
+            }
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
+            disabled={exporting}
+          >
+            <option value="excel">Excel (.xlsx)</option>
+            <option value="pdf">PDF (.pdf)</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={handleExportPredictions}
+            disabled={exporting}
+            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {exporting ? "Exportando..." : "Exportar"}
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-2 text-[11px] text-slate-400">
+        Esta opción cubre la exportación de predicciones en formato Excel y PDF.
+      </p>
+
+      {exportSuccess && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          <CheckCircle2 className="mt-[2px] h-3.5 w-3.5" />
+          <p>{exportSuccess}</p>
+        </div>
+      )}
+
+      {exportError && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <AlertCircle className="mt-[2px] h-3.5 w-3.5" />
+          <p>{exportError}</p>
+        </div>
+      )}
+    </div>
+  ) : null;
 
   return (
     <section className="space-y-6">
@@ -893,6 +1171,8 @@ export default function PrediccionesPage() {
             </div>
           </div>
 
+          {exportPanel}
+
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="mb-3 flex items-center justify-between">
               <div>
@@ -1091,6 +1371,8 @@ export default function PrediccionesPage() {
               )}
             </div>
           </div>
+
+          {exportPanel}
 
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">

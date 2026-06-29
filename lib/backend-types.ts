@@ -125,6 +125,7 @@ export type UserDTO = {
   isActive?: boolean | null;
   phone?: string | null;
   createdAt?: string | null;
+  mustChangePassword?: boolean | null;
 };
 
 export type AlertDTO = {

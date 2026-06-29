@@ -11,6 +11,7 @@ const API_BASE_URL =
 
 interface AuthResponse {
   token: string;
+  mustChangePassword?: boolean | null;
 }
 
 interface UserDTO {
@@ -20,6 +21,8 @@ interface UserDTO {
   fullName?: string;
   role: string;
   active?: boolean;
+  isActive?: boolean;
+  mustChangePassword?: boolean | null;
   createdAt?: string;
 }
 
@@ -34,6 +37,17 @@ export function normalizeRole(role?: string | null): UserRole {
   if (cleanRole === "EMPLOYEE") return "EMPLOYEE";
 
   return "EMPLOYEE";
+}
+
+function getLoginErrorMessage(rawBody: string): string {
+  if (!rawBody) return "Credenciales incorrectas.";
+
+  try {
+    const parsed = JSON.parse(rawBody) as { message?: string; error?: string };
+    return parsed.message || parsed.error || "Credenciales incorrectas.";
+  } catch {
+    return rawBody.length <= 120 ? rawBody : "Credenciales incorrectas.";
+  }
 }
 
 async function fetchMe(token: string): Promise<UserDTO> {
@@ -68,12 +82,12 @@ export async function loginWithBackend({
     });
 
     if (!loginRes.ok) {
-      return null;
+      const text = await loginRes.text();
+      throw new Error(getLoginErrorMessage(text));
     }
 
-    const { token } = (await loginRes.json()) as AuthResponse;
-
-    const me = await fetchMe(token);
+    const authResponse = (await loginRes.json()) as AuthResponse;
+    const me = await fetchMe(authResponse.token);
 
     const user: AuthUser = {
       id: me.id,
@@ -81,7 +95,10 @@ export async function loginWithBackend({
       email: me.email,
       fullName: me.fullName ?? me.username,
       role: normalizeRole(me.role),
-      token,
+      token: authResponse.token,
+      mustChangePassword: Boolean(
+        authResponse.mustChangePassword ?? me.mustChangePassword ?? false
+      ),
     };
 
     return user;
@@ -91,7 +108,6 @@ export async function loginWithBackend({
   }
 }
 
-// Alias temporal para no romper imports antiguos
 export const loginMock = loginWithBackend;
 
 export function hasRole(userRole: UserRole, allowedRoles: UserRole[]): boolean {

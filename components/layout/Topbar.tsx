@@ -10,9 +10,10 @@ import { getUnresolvedAlerts } from "@/lib/services";
 interface TopbarProps {
   title?: string;
   subtitle?: string;
+  onOpenMobileMenu?: () => void;
 }
 
-export function Topbar({ title, subtitle }: TopbarProps) {
+export function Topbar({ title, subtitle, onOpenMobileMenu }: TopbarProps) {
   const { user, isAuthenticated, logout } = useAuthContext();
 
   const [pendingAlerts, setPendingAlerts] = useState(0);
@@ -54,7 +55,10 @@ export function Topbar({ title, subtitle }: TopbarProps) {
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 md:hidden"
+          onClick={onOpenMobileMenu}
+          aria-label="Abrir menú de navegación"
+          title="Abrir menú"
+          className="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 md:hidden"
         >
           <Menu className="h-4 w-4" />
         </button>

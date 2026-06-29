@@ -33,11 +33,20 @@ type FormMode = "create" | "edit";
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: "ADMIN", label: "Administrador" },
-  { value: "MANAGER", label: "Gerente / Supervisor" },
-  { value: "EMPLOYEE", label: "Operador / Almacenero" },
+  { value: "MANAGER", label: "Gerente / Manager" },
+  { value: "EMPLOYEE", label: "Operador / Empleado" },
 ];
 
 const PAGE_SIZE = 20;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type UserFormErrors = {
+  username?: string;
+  fullName?: string;
+  email?: string;
+  role?: string;
+  password?: string;
+};
 
 function formatDateTime(iso?: string | null) {
   if (!iso) return "—";
@@ -93,6 +102,7 @@ export default function UsuariosPage() {
   const [role, setRole] = useState<Role>("EMPLOYEE");
   const [active, setActive] = useState(true);
   const [password, setPassword] = useState("");
+  const [formErrors, setFormErrors] = useState<UserFormErrors>({});
 
   const loadUsers = useCallback(async () => {
     try {
@@ -131,6 +141,7 @@ export default function UsuariosPage() {
 
     setError(null);
     setSuccessMessage(null);
+    setFormErrors({});
   };
 
   const loadUserIntoForm = (user: UserWithTimestamps) => {
@@ -147,6 +158,7 @@ export default function UsuariosPage() {
 
     setError(null);
     setSuccessMessage(null);
+    setFormErrors({});
   };
 
   useEffect(() => {
@@ -207,24 +219,53 @@ export default function UsuariosPage() {
   const adminCount = users.filter((user) => user.role === "ADMIN").length;
   const managerCount = users.filter((user) => user.role === "MANAGER").length;
 
-  const validateForm = (): boolean => {
-    if (!username.trim()) {
-      setError("El nombre de usuario es obligatorio.");
+  const isUserFormValid = useMemo(() => {
+    if (!fullName.trim()) return false;
+    if (!username.trim()) return false;
+    if (!email.trim() || !EMAIL_PATTERN.test(email.trim())) return false;
+    if (!role) return false;
+    if (mode === "create" && password.trim().length < 6) return false;
+    if (mode === "edit" && password.trim() && password.trim().length < 6) {
       return false;
+    }
+
+    return true;
+  }, [fullName, username, email, role, mode, password]);
+
+  const validateForm = (): boolean => {
+    const nextErrors: UserFormErrors = {};
+
+    if (!fullName.trim()) {
+      nextErrors.fullName = "El nombre completo es obligatorio.";
+    }
+
+    if (!username.trim()) {
+      nextErrors.username = "El nombre de usuario es obligatorio.";
     }
 
     if (!email.trim()) {
-      setError("El correo electrónico es obligatorio.");
-      return false;
+      nextErrors.email = "El correo electrónico es obligatorio.";
+    } else if (!EMAIL_PATTERN.test(email.trim())) {
+      nextErrors.email = "Ingresa un correo electrónico válido.";
     }
 
     if (!role) {
-      setError("Selecciona un rol para el usuario.");
-      return false;
+      nextErrors.role = "Selecciona un rol para el usuario.";
     }
 
     if (mode === "create" && password.trim().length < 6) {
-      setError("La contraseña debe tener al menos 6 caracteres.");
+      nextErrors.password = "La contraseña debe tener al menos 6 caracteres.";
+    }
+
+    if (mode === "edit" && password.trim() && password.trim().length < 6) {
+      nextErrors.password = "La contraseña debe tener al menos 6 caracteres.";
+    }
+
+    setFormErrors(nextErrors);
+
+    const messages = Object.values(nextErrors);
+    if (messages.length > 0) {
+      setError(messages[0]);
       return false;
     }
 
@@ -245,7 +286,7 @@ export default function UsuariosPage() {
       const payload: UserPayload = {
         username: username.trim(),
         email: email.trim(),
-        fullName: fullName.trim() || null,
+        fullName: fullName.trim(),
         role,
         active,
         isActive: active,
@@ -697,10 +738,18 @@ export default function UsuariosPage() {
                 <input
                   type="text"
                   value={fullName}
-                  onChange={(event) => setFullName(event.target.value)}
+                  onChange={(event) => {
+                    setFullName(event.target.value);
+                    setFormErrors((prev) => ({ ...prev, fullName: undefined }));
+                  }}
                   placeholder="Ej: Juan Pérez"
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                 />
+                {formErrors.fullName && (
+                  <p className="text-[11px] text-red-600">
+                    {formErrors.fullName}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -710,10 +759,18 @@ export default function UsuariosPage() {
                 <input
                   type="text"
                   value={username}
-                  onChange={(event) => setUsername(event.target.value)}
+                  onChange={(event) => {
+                    setUsername(event.target.value);
+                    setFormErrors((prev) => ({ ...prev, username: undefined }));
+                  }}
                   placeholder="Ej: jperez"
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                 />
+                {formErrors.username && (
+                  <p className="text-[11px] text-red-600">
+                    {formErrors.username}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -727,11 +784,19 @@ export default function UsuariosPage() {
                   <input
                     type="email"
                     value={email}
-                    onChange={(event) => setEmail(event.target.value)}
+                    onChange={(event) => {
+                      setEmail(event.target.value);
+                      setFormErrors((prev) => ({ ...prev, email: undefined }));
+                    }}
                     placeholder="usuario@restaurante.com"
                     className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                   />
                 </div>
+                {formErrors.email && (
+                  <p className="text-[11px] text-red-600">
+                    {formErrors.email}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -740,7 +805,10 @@ export default function UsuariosPage() {
                 </label>
                 <select
                   value={role}
-                  onChange={(event) => setRole(event.target.value)}
+                  onChange={(event) => {
+                    setRole(event.target.value);
+                    setFormErrors((prev) => ({ ...prev, role: undefined }));
+                  }}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-1"
                 >
                   {ROLE_OPTIONS.map((roleOption) => (
@@ -763,7 +831,10 @@ export default function UsuariosPage() {
                   <input
                     type="password"
                     value={password}
-                    onChange={(event) => setPassword(event.target.value)}
+                    onChange={(event) => {
+                      setPassword(event.target.value);
+                      setFormErrors((prev) => ({ ...prev, password: undefined }));
+                    }}
                     placeholder={
                       mode === "create"
                         ? "Mínimo 6 caracteres…"
@@ -772,6 +843,12 @@ export default function UsuariosPage() {
                     className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none ring-blue-500 focus:ring-1"
                   />
                 </div>
+
+                {formErrors.password && (
+                  <p className="text-[11px] text-red-600">
+                    {formErrors.password}
+                  </p>
+                )}
 
                 <p className="text-[11px] text-slate-400">
                   La contraseña se envía solo si escribes algo. En edición,
@@ -811,7 +888,8 @@ export default function UsuariosPage() {
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="submit"
-                disabled={saving || loadingUsers}
+                disabled={saving || loadingUsers || !isUserFormValid}
+                title={!isUserFormValid ? "Completa los campos obligatorios antes de guardar." : undefined}
                 className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {saving ? (

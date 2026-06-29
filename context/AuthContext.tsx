@@ -26,6 +26,7 @@ interface AuthContextValue {
   login: (params: LoginParams) => Promise<boolean>;
   logout: () => void;
   hasRole: (roles: UserRole[]) => boolean;
+  updateUserSession: (updates: Partial<AuthUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...parsed,
         token: parsed.token || storedToken,
         role: normalizeRole(parsed.role),
+        mustChangePassword: Boolean(parsed.mustChangePassword),
       });
     } catch (error) {
       console.error("Error leyendo sesión:", error);
@@ -72,6 +74,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthenticated = !!user?.token;
 
+  const updateUserSession = useCallback((updates: Partial<AuthUser>) => {
+    setUser((currentUser) => {
+      if (!currentUser) return currentUser;
+
+      const updatedUser: AuthUser = {
+        ...currentUser,
+        ...updates,
+        role: normalizeRole(updates.role ?? currentUser.role),
+      };
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
+        window.localStorage.setItem(AUTH_TOKEN_KEY, updatedUser.token);
+      }
+
+      return updatedUser;
+    });
+  }, []);
+
   const login = useCallback(
     async (params: LoginParams): Promise<boolean> => {
       try {
@@ -84,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const normalizedUser: AuthUser = {
           ...authUser,
           role: normalizeRole(authUser.role),
+          mustChangePassword: Boolean(authUser.mustChangePassword),
         };
 
         if (typeof window !== "undefined") {
@@ -95,7 +117,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setUser(normalizedUser);
-        router.push("/dashboard");
+
+        if (normalizedUser.mustChangePassword) {
+          router.push("/change-password");
+        } else {
+          router.push("/dashboard");
+        }
 
         return true;
       } catch (error) {
@@ -133,8 +160,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       hasRole,
+      updateUserSession,
     }),
-    [user, isAuthenticated, isAuthLoading, login, logout, hasRole]
+    [user, isAuthenticated, isAuthLoading, login, logout, hasRole, updateUserSession]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

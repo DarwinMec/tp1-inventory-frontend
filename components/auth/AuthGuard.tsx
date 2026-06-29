@@ -16,6 +16,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   const { user, isAuthenticated, isAuthLoading } = useAuthContext();
 
+  const mustChangePassword = Boolean(user?.mustChangePassword);
   const canAccess = canAccessPath(user?.role, pathname);
 
   useEffect(() => {
@@ -26,10 +27,15 @@ export function AuthGuard({ children }: AuthGuardProps) {
       return;
     }
 
+    if (mustChangePassword) {
+      router.replace("/change-password");
+      return;
+    }
+
     if (!canAccess) {
       router.replace("/dashboard");
     }
-  }, [isAuthLoading, isAuthenticated, canAccess, router]);
+  }, [isAuthLoading, isAuthenticated, mustChangePassword, canAccess, router]);
 
   if (isAuthLoading) {
     return (
@@ -46,6 +52,19 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   if (!isAuthenticated) {
     return null;
+  }
+
+  if (mustChangePassword) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-5 text-center shadow-xl">
+          <p className="text-sm font-semibold">Cambio de contraseña requerido</p>
+          <p className="mt-1 text-xs text-slate-400">
+            Redirigiendo al formulario de actualización de contraseña...
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (!canAccess) {

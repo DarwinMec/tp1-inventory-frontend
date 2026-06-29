@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useAuthContext } from "@/context/AuthContext";
+import { canAccessModule, ROUTE_PERMISSIONS } from "@/lib/permissions";
+import type { UserRole } from "@/lib/types";
 import {
   Activity,
   AlertCircle,
@@ -66,6 +69,28 @@ type InventoryHealthItem = {
   minStock: number;
   status: InventoryStatus;
 };
+
+type DashboardSupplySuggestion = {
+  productId: string;
+  productName: string;
+  unitMeasure?: string | null;
+  totalRequired: number;
+  availableStock: number;
+  quantityToBuy: number;
+  source: "ml" | "inventory" | "combined";
+  reason: string;
+};
+
+function canAccessDashboardRoute(
+  role: UserRole | string | null | undefined,
+  href: string,
+) {
+  const permission = ROUTE_PERMISSIONS.find((item) => item.href === href);
+
+  if (!permission) return false;
+
+  return canAccessModule(role ? (role as UserRole) : undefined, permission.roles);
+}
 
 function toNumber(value?: number | string | null) {
   if (value == null) return 0;
@@ -179,7 +204,7 @@ function severityLabel(severity?: string | null) {
 
 function buildInventoryHealth(
   products: ProductDTO[],
-  inventories: Record<string, InventoryDTO | null>
+  inventories: Record<string, InventoryDTO | null>,
 ): InventoryHealthItem[] {
   return products
     .filter((product) => product.isActive !== false)
@@ -229,6 +254,40 @@ function statusWeight(status: InventoryStatus) {
   }
 }
 
+function getInventorySuggestedQuantity(item: InventoryHealthItem) {
+  if (item.status === "ok") return 0;
+
+  const minStock = item.minStock;
+  const availableStock = item.availableStock;
+
+  if (minStock <= 0) return 0;
+
+  if (item.status === "no_stock" || item.status === "below_min") {
+    return Math.max(minStock - availableStock, 0);
+  }
+
+  if (item.status === "near_min") {
+    const preventiveTarget = minStock * 1.15;
+    return Math.max(preventiveTarget - availableStock, 0);
+  }
+
+  return 0;
+}
+
+function getInventorySuggestionReason(item: InventoryHealthItem) {
+  switch (item.status) {
+    case "no_stock":
+      return "Reposición por falta de stock";
+    case "below_min":
+      return "Reposición por stock bajo mínimo";
+    case "near_min":
+      return "Reposición preventiva por cercanía al mínimo";
+    case "ok":
+    default:
+      return "Sugerencia del modelo ML";
+  }
+}
+
 function getSaleMainDish(sale: SaleDTO) {
   const firstItem = sale.items?.[0];
 
@@ -240,6 +299,18 @@ function getSaleMainDish(sale: SaleDTO) {
 }
 
 export default function DashboardPage() {
+  const { user } = useAuthContext();
+
+  const canAccessInsumos = canAccessDashboardRoute(user?.role, "/insumos");
+  const canAccessPlatillos = canAccessDashboardRoute(user?.role, "/platillos");
+  const canAccessVentas = canAccessDashboardRoute(user?.role, "/ventas");
+  const canAccessPredicciones = canAccessDashboardRoute(
+    user?.role,
+    "/predicciones",
+  );
+  const canAccessOrdenes = canAccessDashboardRoute(user?.role, "/ordenes");
+  const canAccessReportes = canAccessDashboardRoute(user?.role, "/reportes");
+
   const [stats, setStats] = useState<DashboardStatsDTO | null>(null);
   const [tendencias, setTendencias] = useState<DashboardTendenciaDTO[]>([]);
   const [alerts, setAlerts] = useState<AlertDTO[]>([]);
@@ -262,7 +333,7 @@ export default function DashboardPage() {
     async function safeLoad<T>(
       label: string,
       request: () => Promise<T>,
-      fallback: T
+      fallback: T,
     ): Promise<T> {
       try {
         return await request();
@@ -289,32 +360,36 @@ export default function DashboardPage() {
         safeLoad<DashboardStatsDTO | null>(
           "métricas generales",
           () => getDashboardStats(),
-          null
+          null,
         ),
         safeLoad<DashboardTendenciaDTO[]>(
           "tendencias",
           () => getDashboardTrends(6),
-          []
+          [],
         ),
         safeLoad<AlertDTO[]>(
           "alertas pendientes",
           () => getUnresolvedAlerts(),
-          []
+          [],
         ),
-        safeLoad<MLModelInfoDTO | null>(
-          "modelo ML activo",
-          () => getActiveMLModel(),
-          null
-        ),
-        safeLoad<WeeklyGlobalPredictionResponseDTO | null>(
-          "plan semanal de abastecimiento",
-          () => getWeeklySupplyPlan(1),
-          null
-        ),
+        canAccessPredicciones
+          ? safeLoad<MLModelInfoDTO | null>(
+              "modelo ML activo",
+              () => getActiveMLModel(),
+              null,
+            )
+          : Promise.resolve(null),
+        canAccessPredicciones
+          ? safeLoad<WeeklyGlobalPredictionResponseDTO | null>(
+              "plan semanal de abastecimiento",
+              () => getWeeklySupplyPlan(1),
+              null,
+            )
+          : Promise.resolve(null),
         safeLoad<PageResponse<SaleDTO>>(
           "últimas ventas",
           () => getSalesPage(0, 5),
-          { content: [] }
+          { content: [] },
         ),
         safeLoad<ProductDTO[]>("insumos", () => getProducts(), []),
       ]);
@@ -327,11 +402,11 @@ export default function DashboardPage() {
           } catch (error) {
             console.warn(
               `No se pudo cargar inventario para ${product.name}`,
-              error
+              error,
             );
             return [product.id, null] as const;
           }
-        })
+        }),
       );
 
       setStats(statsData);
@@ -347,7 +422,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canAccessPredicciones]);
 
   useEffect(() => {
     loadDashboardData();
@@ -360,12 +435,12 @@ export default function DashboardPage() {
         Ventas: toNumber(t.ventas),
         Prediccion: toNumber(t.prediccion),
       })),
-    [tendencias]
+    [tendencias],
   );
 
   const inventoryHealth = useMemo(
     () => buildInventoryHealth(products, inventories),
-    [products, inventories]
+    [products, inventories],
   );
 
   const criticalInventoryItems = useMemo(() => {
@@ -382,42 +457,89 @@ export default function DashboardPage() {
   const criticalInventoryCount = useMemo(
     () =>
       inventoryHealth.filter(
-        (item) => item.status === "no_stock" || item.status === "below_min"
+        (item) => item.status === "no_stock" || item.status === "below_min",
       ).length,
-    [inventoryHealth]
+    [inventoryHealth],
   );
 
   const nearMinInventoryCount = useMemo(
     () => inventoryHealth.filter((item) => item.status === "near_min").length,
-    [inventoryHealth]
+    [inventoryHealth],
   );
 
   const stableInventoryCount = useMemo(
     () => inventoryHealth.filter((item) => item.status === "ok").length,
-    [inventoryHealth]
+    [inventoryHealth],
   );
 
-  const unreadAlertsCount = alerts.filter((alert) => alert.isRead === false)
-    .length;
-
-  const highSeverityAlertsCount = alerts.filter((alert) =>
-    ["critical", "high"].includes((alert.severity ?? "").toLowerCase())
+  const unreadAlertsCount = alerts.filter(
+    (alert) => alert.isRead === false,
   ).length;
 
-  const weeklySupplyItems = useMemo(() => {
-    return [...(weeklySupply?.supplies ?? [])]
-      .filter((item) => toNumber(item.quantityToBuy) > 0)
+  const highSeverityAlertsCount = alerts.filter((alert) =>
+    ["critical", "high"].includes((alert.severity ?? "").toLowerCase()),
+  ).length;
+
+  const weeklySupplyItems = useMemo<DashboardSupplySuggestion[]>(() => {
+    const suggestions = new Map<string, DashboardSupplySuggestion>();
+
+    for (const item of weeklySupply?.supplies ?? []) {
+      const quantityToBuy = toNumber(item.quantityToBuy);
+
+      if (quantityToBuy <= 0) continue;
+
+      suggestions.set(item.productId, {
+        productId: item.productId,
+        productName: item.productName,
+        unitMeasure: item.unitMeasure,
+        totalRequired: toNumber(item.totalRequired),
+        availableStock: toNumber(item.availableStock),
+        quantityToBuy,
+        source: "ml",
+        reason: "Sugerencia del modelo ML para la demanda semanal",
+      });
+    }
+
+    for (const inventoryItem of inventoryHealth.filter(
+      (item) => item.status !== "ok",
+    )) {
+      const quantityToBuy = getInventorySuggestedQuantity(inventoryItem);
+
+      if (quantityToBuy <= 0) continue;
+
+      const existing = suggestions.get(inventoryItem.product.id);
+
+      if (existing) {
+        suggestions.set(inventoryItem.product.id, {
+          ...existing,
+          availableStock: inventoryItem.availableStock,
+          quantityToBuy: Math.max(existing.quantityToBuy, quantityToBuy),
+          source: "combined",
+          reason: `${existing.reason} + ${getInventorySuggestionReason(
+            inventoryItem,
+          )}`,
+        });
+      } else {
+        suggestions.set(inventoryItem.product.id, {
+          productId: inventoryItem.product.id,
+          productName: inventoryItem.product.name,
+          unitMeasure: inventoryItem.product.unitMeasure,
+          totalRequired: 0,
+          availableStock: inventoryItem.availableStock,
+          quantityToBuy,
+          source: "inventory",
+          reason: getInventorySuggestionReason(inventoryItem),
+        });
+      }
+    }
+
+    return [...suggestions.values()]
       .sort((a, b) => toNumber(b.quantityToBuy) - toNumber(a.quantityToBuy))
       .slice(0, 5);
-  }, [weeklySupply]);
+  }, [weeklySupply, inventoryHealth]);
 
-  const totalToBuy = weeklySupplyItems.reduce(
-    (acc, item) => acc + toNumber(item.quantityToBuy),
-    0
-  );
 
-  const variacionEsPositiva =
-    (stats?.variacionVentasPorcentaje ?? 0) >= 0;
+  const variacionEsPositiva = (stats?.variacionVentasPorcentaje ?? 0) >= 0;
 
   const nivelServicioLabel = useMemo(() => {
     const ns = stats?.nivelServicio ?? 0;
@@ -529,8 +651,8 @@ export default function DashboardPage() {
                 {loading ? "…" : alerts.length}
               </p>
               <p className="mt-1 text-[11px] text-slate-400">
-                {unreadAlertsCount} no leídas · {highSeverityAlertsCount} de
-                severidad alta.
+                {unreadAlertsCount} alertas no leídas ·{" "}
+                {highSeverityAlertsCount} de severidad alta.
               </p>
             </div>
 
@@ -577,8 +699,9 @@ export default function DashboardPage() {
           </Link>
         </div>
 
+        {canAccessPredicciones && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-medium text-slate-500">
                 Modelo predictivo
@@ -604,6 +727,7 @@ export default function DashboardPage() {
             <ExternalLink className="h-3 w-3" />
           </Link>
         </div>
+        )}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -617,11 +741,11 @@ export default function DashboardPage() {
               Total de insumos
             </p>
             <p className="text-lg font-semibold text-slate-900">
-              {loading && !stats ? "…" : stats?.totalInsumos ?? products.length}
+              {loading && !stats
+                ? "…"
+                : (stats?.totalInsumos ?? products.length)}
             </p>
-            <p className="text-[11px] text-slate-400">
-              Productos registrados.
-            </p>
+            <p className="text-[11px] text-slate-400">Productos registrados.</p>
           </div>
         </div>
 
@@ -635,11 +759,9 @@ export default function DashboardPage() {
               Total de platillos
             </p>
             <p className="text-lg font-semibold text-slate-900">
-              {loading && !stats ? "…" : stats?.totalPlatillos ?? "—"}
+              {loading && !stats ? "…" : (stats?.totalPlatillos ?? "—")}
             </p>
-            <p className="text-[11px] text-slate-400">
-              Carta registrada.
-            </p>
+            <p className="text-[11px] text-slate-400">Carta registrada.</p>
           </div>
         </div>
 
@@ -651,7 +773,7 @@ export default function DashboardPage() {
           <div>
             <p className="text-xs font-medium text-slate-500">Proveedores</p>
             <p className="text-lg font-semibold text-slate-900">
-              {loading && !stats ? "…" : stats?.totalProveedores ?? "—"}
+              {loading && !stats ? "…" : (stats?.totalProveedores ?? "—")}
             </p>
             <p className="text-[11px] text-slate-400">
               Cadena de abastecimiento.
@@ -742,8 +864,9 @@ export default function DashboardPage() {
         </div>
 
         <div className="space-y-4">
+          {canAccessPredicciones && (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-start gap-3">
+                        <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
                 <Server className="h-5 w-5 text-blue-600" />
               </div>
@@ -794,6 +917,9 @@ export default function DashboardPage() {
               Entrenado: {formatDateTime(modelInfo?.trainedAt)}
             </p>
           </div>
+
+
+          )}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-start gap-3">
@@ -865,7 +991,7 @@ export default function DashboardPage() {
 
                       <span
                         className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${inventoryStatusClasses(
-                          item.status
+                          item.status,
                         )}`}
                       >
                         {inventoryStatusLabel(item.status)}
@@ -879,27 +1005,37 @@ export default function DashboardPage() {
                     </p>
                   </div>
 
-                  <Link
-                    href={`/ordenes?productId=${item.product.id}`}
-                    className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-blue-700"
-                  >
-                    Abastecer
-                  </Link>
+                  {canAccessOrdenes ? (
+                    <Link
+                      href={`/ordenes?productId=${item.product.id}`}
+                      className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-blue-700"
+                    >
+                      Abastecer
+                    </Link>
+                  ) : canAccessInsumos ? (
+                    <Link
+                      href={`/insumos?productId=${item.product.id}`}
+                      className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Ver insumo
+                    </Link>
+                  ) : null}
                 </div>
               ))}
             </div>
           )}
         </div>
 
+        {canAccessPredicciones && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
                 Plan semanal sugerido
               </h2>
               <p className="text-xs text-slate-500">
-                Insumos que el módulo ML recomienda comprar para la próxima
-                semana.
+                Compras recomendadas combinando demanda ML y estado actual de
+                inventario.
               </p>
             </div>
 
@@ -917,15 +1053,14 @@ export default function DashboardPage() {
             <span className="font-semibold">
               {weeklySupply?.weekStart ?? "Sin predicción disponible"}
             </span>{" "}
-            · Total sugerido:{" "}
-            <span className="font-semibold">{formatQuantity(totalToBuy)}</span>{" "}
-            unidades base.
+            · Insumos sugeridos: {" "}
+            <span className="font-semibold">{weeklySupplyItems.length}</span>.
           </div>
 
           {weeklySupplyItems.length === 0 ? (
             <div className="flex min-h-[180px] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
-              No hay compras sugeridas para la semana o todavía no se generaron
-              predicciones.
+              No hay compras sugeridas para la semana ni insumos por debajo del
+              umbral de atención.
             </div>
           ) : (
             <div className="space-y-2">
@@ -940,9 +1075,12 @@ export default function DashboardPage() {
                     </p>
                     <p className="mt-1 text-[11px] text-slate-400">
                       Disponible: {formatQuantity(item.availableStock)}{" "}
-                      {item.unitMeasure ?? ""} · Requerido:{" "}
+                      {item.unitMeasure ?? ""} · Requerido ML:{" "}
                       {formatQuantity(item.totalRequired)}{" "}
                       {item.unitMeasure ?? ""}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      {item.reason}
                     </p>
                   </div>
 
@@ -950,18 +1088,28 @@ export default function DashboardPage() {
                     <p className="text-xs font-semibold text-slate-900">
                       Comprar {formatQuantity(item.quantityToBuy)}
                     </p>
-                    <Link
-                      href={`/ordenes?productId=${item.productId}`}
-                      className="text-[11px] font-semibold text-blue-700 hover:underline"
-                    >
-                      Registrar ingreso
-                    </Link>
+                    <p className="text-[10px] font-medium text-slate-400">
+                      {item.source === "combined"
+                        ? "ML + inventario"
+                        : item.source === "inventory"
+                          ? "Inventario"
+                          : "ML"}
+                    </p>
+                    {canAccessOrdenes && (
+                      <Link
+                        href={`/ordenes?productId=${item.productId}`}
+                        className="text-[11px] font-semibold text-blue-700 hover:underline"
+                      >
+                        Registrar ingreso
+                      </Link>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
+        )}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
@@ -1059,7 +1207,7 @@ export default function DashboardPage() {
 
                     <span
                       className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${severityClasses(
-                        alert.severity
+                        alert.severity,
                       )}`}
                     >
                       {severityLabel(alert.severity)}
@@ -1078,14 +1226,22 @@ export default function DashboardPage() {
                     <Link
                       href={
                         alert.productId
-                          ? `/ordenes?productId=${alert.productId}`
-                          : alert.dishId
-                          ? `/platillos?dishId=${alert.dishId}`
-                          : "/alertas"
+                          ? canAccessOrdenes
+                            ? `/ordenes?productId=${alert.productId}`
+                            : canAccessInsumos
+                              ? `/insumos?productId=${alert.productId}`
+                              : "/alertas"
+                          : alert.dishId && canAccessPlatillos
+                            ? `/platillos?dishId=${alert.dishId}`
+                            : "/alertas"
                       }
                       className="text-[11px] font-semibold text-blue-700 hover:underline"
                     >
-                      Atender
+                      {alert.productId && !canAccessOrdenes && canAccessInsumos
+                        ? "Ver insumo"
+                        : alert.dishId && !canAccessPlatillos
+                          ? "Ver alerta"
+                          : "Atender"}
                     </Link>
                   </div>
                 </div>
@@ -1096,38 +1252,44 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Link
-          href="/ventas"
-          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
-        >
-          <span className="inline-flex items-center gap-2">
-            <ShoppingCart className="h-4 w-4 text-blue-600" />
-            Registrar venta
-          </span>
-          <ExternalLink className="h-4 w-4 text-slate-400" />
-        </Link>
+        {canAccessVentas && (
+          <Link
+            href="/ventas"
+            className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
+          >
+            <span className="inline-flex items-center gap-2">
+              <ShoppingCart className="h-4 w-4 text-blue-600" />
+              Registrar venta
+            </span>
+            <ExternalLink className="h-4 w-4 text-slate-400" />
+          </Link>
+        )}
 
-        <Link
-          href="/ordenes"
-          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
-        >
-          <span className="inline-flex items-center gap-2">
-            <Warehouse className="h-4 w-4 text-emerald-600" />
-            Registrar abastecimiento
-          </span>
-          <ExternalLink className="h-4 w-4 text-slate-400" />
-        </Link>
+        {canAccessOrdenes && (
+          <Link
+            href="/ordenes"
+            className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
+          >
+            <span className="inline-flex items-center gap-2">
+              <Warehouse className="h-4 w-4 text-emerald-600" />
+              Registrar abastecimiento
+            </span>
+            <ExternalLink className="h-4 w-4 text-slate-400" />
+          </Link>
+        )}
 
-        <Link
-          href="/reportes"
-          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
-        >
-          <span className="inline-flex items-center gap-2">
-            <ClipboardList className="h-4 w-4 text-amber-600" />
-            Generar reporte
-          </span>
-          <ExternalLink className="h-4 w-4 text-slate-400" />
-        </Link>
+        {canAccessReportes && (
+          <Link
+            href="/reportes"
+            className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
+          >
+            <span className="inline-flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-amber-600" />
+              Generar reporte
+            </span>
+            <ExternalLink className="h-4 w-4 text-slate-400" />
+          </Link>
+        )}
       </div>
     </section>
   );

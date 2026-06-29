@@ -15,6 +15,7 @@ export interface AuthUser {
   fullName: string;
   role: UserRole;
   token: string; // JWT del backend
+  mustChangePassword?: boolean;
 }
 
 

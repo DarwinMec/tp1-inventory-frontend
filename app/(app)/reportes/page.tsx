@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   AlertCircle,
   BarChart3,
   CalendarDays,
   CheckCircle2,
+  Download,
   FileJson,
   Loader2,
   Plus,
@@ -31,6 +35,28 @@ type SalesSummaryPayload = {
   topDishes?: TopDish[];
 };
 
+type ReportExportFormat = "json" | "pdf" | "xlsx";
+
+type ExportableReport = {
+  metadata: {
+    id: string;
+    title: string;
+    reportType: string;
+    period: string;
+    generatedBy: string;
+    generatedAt: string;
+    originalFileFormat: string;
+  };
+  summary: {
+    startDate: string;
+    endDate: string;
+    totalOrders: number;
+    totalItems: number;
+    totalSalesAmount: number;
+  };
+  topDishes: TopDish[];
+};
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -39,6 +65,106 @@ function daysAgoISO(days: number) {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString().slice(0, 10);
+}
+
+function buildValidDate(year: number, month: number, day: number) {
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function parseReportDate(value?: string | null): Date | null {
+  if (!value) return null;
+
+  const cleanValue = String(value).trim();
+
+  const isoMatch = cleanValue.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return buildValidDate(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3])
+    );
+  }
+
+  const slashMatch = cleanValue.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    return buildValidDate(
+      Number(slashMatch[3]),
+      Number(slashMatch[2]),
+      Number(slashMatch[1])
+    );
+  }
+
+  const compactMatch = cleanValue.match(/^\d{6,8}$/);
+  if (!compactMatch) return null;
+
+  const year = Number(cleanValue.slice(0, 4));
+  const rest = cleanValue.slice(4);
+
+  if (rest.length === 4) {
+    return buildValidDate(
+      year,
+      Number(rest.slice(0, 2)),
+      Number(rest.slice(2, 4))
+    );
+  }
+
+  if (rest.length === 2) {
+    return buildValidDate(year, Number(rest.slice(0, 1)), Number(rest.slice(1)));
+  }
+
+  if (rest.length === 3) {
+    const monthOneDigit = Number(rest.slice(0, 1));
+    const dayTwoDigits = Number(rest.slice(1));
+    const firstCandidate = buildValidDate(year, monthOneDigit, dayTwoDigits);
+
+    if (firstCandidate) return firstCandidate;
+
+    const monthTwoDigits = Number(rest.slice(0, 2));
+    const dayOneDigit = Number(rest.slice(2));
+    return buildValidDate(year, monthTwoDigits, dayOneDigit);
+  }
+
+  return null;
+}
+
+function formatDateOnly(value?: string | null) {
+  if (!value) return "—";
+
+  const parsedDate = parseReportDate(value);
+
+  if (!parsedDate) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("es-PE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(parsedDate);
+}
+
+function formatDateForFilename(value?: string | null) {
+  const parsedDate = parseReportDate(value);
+
+  if (!parsedDate) {
+    return String(value ?? "sin_fecha").replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+  const day = String(parsedDate.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function formatDateTime(value?: string | null) {
@@ -67,6 +193,166 @@ function getPayload(report: ReportDTO): SalesSummaryPayload {
   return (report.parametersJson ?? {}) as SalesSummaryPayload;
 }
 
+function getReportPeriod(report: ReportDTO) {
+  const payload = getPayload(report);
+  return `${formatDateOnly(payload.startDate)} al ${formatDateOnly(
+    payload.endDate
+  )}`;
+}
+
+function sanitizeFilename(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .toLowerCase();
+}
+
+function getReportBaseFilename(report: ReportDTO) {
+  const payload = getPayload(report);
+  const title = sanitizeFilename(report.title || "reporte_ventas");
+  const start = formatDateForFilename(payload.startDate);
+  const end = formatDateForFilename(payload.endDate);
+
+  return `${title}_${start}_al_${end}`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
+function buildExportableReport(report: ReportDTO): ExportableReport {
+  const payload = getPayload(report);
+
+  return {
+    metadata: {
+      id: report.id,
+      title: report.title,
+      reportType: report.reportType,
+      period: getReportPeriod(report),
+      generatedBy: report.generatedByUsername ?? "—",
+      generatedAt: formatDateTime(report.generatedAt),
+      originalFileFormat: report.fileFormat ?? "JSON",
+    },
+    summary: {
+      startDate: formatDateOnly(payload.startDate),
+      endDate: formatDateOnly(payload.endDate),
+      totalOrders: Number(payload.totalOrders ?? 0),
+      totalItems: Number(payload.totalItems ?? 0),
+      totalSalesAmount: Number(payload.totalSalesAmount ?? 0),
+    },
+    topDishes: (payload.topDishes ?? []).map((dish) => ({
+      dishName: dish.dishName ?? "—",
+      totalQuantity: Number(dish.totalQuantity ?? 0),
+    })),
+  };
+}
+
+function exportReportAsJson(report: ReportDTO) {
+  const data = buildExportableReport(report);
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json;charset=utf-8",
+  });
+
+  downloadBlob(blob, `${getReportBaseFilename(report)}.json`);
+}
+
+function exportReportAsXlsx(report: ReportDTO) {
+  const data = buildExportableReport(report);
+  const workbook = XLSX.utils.book_new();
+
+  const summaryRows = [
+    ["Reporte", data.metadata.title],
+    ["Tipo", data.metadata.reportType],
+    ["Periodo", data.metadata.period],
+    ["Generado por", data.metadata.generatedBy],
+    ["Fecha de generación", data.metadata.generatedAt],
+    ["Pedidos", data.summary.totalOrders],
+    ["Unidades vendidas", data.summary.totalItems],
+    ["Ventas", data.summary.totalSalesAmount],
+  ];
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumen");
+
+  const topDishesSheet = XLSX.utils.json_to_sheet(
+    data.topDishes.map((dish, index) => ({
+      "#": index + 1,
+      Platillo: dish.dishName,
+      "Cantidad vendida": dish.totalQuantity,
+    }))
+  );
+  XLSX.utils.book_append_sheet(workbook, topDishesSheet, "Platos vendidos");
+
+  XLSX.writeFile(workbook, `${getReportBaseFilename(report)}.xlsx`);
+}
+
+function exportReportAsPdf(report: ReportDTO) {
+  const data = buildExportableReport(report);
+  const doc = new jsPDF();
+
+  doc.setFontSize(14);
+  doc.text("Reporte de resumen de ventas", 14, 16);
+
+  doc.setFontSize(10);
+  doc.text(`Reporte: ${data.metadata.title}`, 14, 25);
+  doc.text(`Periodo: ${data.metadata.period}`, 14, 31);
+  doc.text(`Generado por: ${data.metadata.generatedBy}`, 14, 37);
+  doc.text(`Fecha de generación: ${data.metadata.generatedAt}`, 14, 43);
+
+  autoTable(doc, {
+    startY: 51,
+    head: [["Indicador", "Valor"]],
+    body: [
+      ["Pedidos", data.summary.totalOrders],
+      ["Unidades vendidas", data.summary.totalItems],
+      ["Ventas", formatCurrency(data.summary.totalSalesAmount)],
+    ],
+  });
+
+  const lastAutoTable = (
+    doc as jsPDF & { lastAutoTable?: { finalY: number } }
+  ).lastAutoTable;
+
+  autoTable(doc, {
+    startY: (lastAutoTable?.finalY ?? 82) + 10,
+    head: [["#", "Platillo", "Cantidad vendida"]],
+    body:
+      data.topDishes.length > 0
+        ? data.topDishes.map((dish, index) => [
+            index + 1,
+            dish.dishName,
+            dish.totalQuantity,
+          ])
+        : [["—", "No se registraron platos vendidos en el periodo", "—"]],
+  });
+
+  doc.save(`${getReportBaseFilename(report)}.pdf`);
+}
+
+function getExportFormatLabel(format: ReportExportFormat) {
+  switch (format) {
+    case "json":
+      return "JSON";
+    case "pdf":
+      return "PDF";
+    case "xlsx":
+      return "XLSX";
+    default:
+      return format;
+  }
+}
+
 export default function ReportesPage() {
   const [reports, setReports] = useState<ReportDTO[]>([]);
 
@@ -75,6 +361,9 @@ export default function ReportesPage() {
 
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [exportingReportKey, setExportingReportKey] = useState<string | null>(
+    null
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -156,6 +445,38 @@ export default function ReportesPage() {
       setError(e?.message ?? "No se pudo generar el reporte de ventas.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleExportReport = (report: ReportDTO, format: ReportExportFormat) => {
+    const exportKey = `${report.id}-${format}`;
+
+    try {
+      setError(null);
+      setSuccessMessage(null);
+      setExportingReportKey(exportKey);
+
+      if (format === "json") {
+        exportReportAsJson(report);
+      } else if (format === "pdf") {
+        exportReportAsPdf(report);
+      } else {
+        exportReportAsXlsx(report);
+      }
+
+      setSuccessMessage(
+        `Reporte exportado en formato ${getExportFormatLabel(
+          format
+        )} correctamente.`
+      );
+    } catch (e: any) {
+      console.error("Error exportando reporte", e);
+      setError(
+        e?.message ??
+          "No se pudo exportar el reporte. Intenta nuevamente o verifica el contenido del reporte."
+      );
+    } finally {
+      setExportingReportKey(null);
     }
   };
 
@@ -345,6 +666,9 @@ export default function ReportesPage() {
                   {latestReport.title}
                 </p>
                 <p className="mt-1 text-[11px] text-slate-400">
+                  Periodo: {getReportPeriod(latestReport)}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
                   Generado por {latestReport.generatedByUsername ?? "—"} ·{" "}
                   {formatDateTime(latestReport.generatedAt)}
                 </p>
@@ -448,6 +772,9 @@ export default function ReportesPage() {
                     Ventas
                   </th>
                   <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
+                    Exportar
+                  </th>
+                  <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
                     Generado por
                   </th>
                   <th className="border-b border-slate-100 px-3 py-2 text-left font-medium text-slate-600">
@@ -459,6 +786,11 @@ export default function ReportesPage() {
               <tbody>
                 {reports.map((report) => {
                   const payload = getPayload(report);
+                  const exportFormats: ReportExportFormat[] = [
+                    "json",
+                    "pdf",
+                    "xlsx",
+                  ];
 
                   return (
                     <tr key={report.id} className="hover:bg-slate-50/60">
@@ -468,13 +800,13 @@ export default function ReportesPage() {
                             {report.title}
                           </span>
                           <span className="text-[10px] text-slate-400">
-                            {report.reportType} · {report.fileFormat ?? "JSON"}
+                            {report.reportType} · Formatos disponibles
                           </span>
                         </div>
                       </td>
 
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
-                        {payload.startDate ?? "—"} al {payload.endDate ?? "—"}
+                        {getReportPeriod(report)}
                       </td>
 
                       <td className="border-b border-slate-100 px-3 py-2 text-right text-slate-700">
@@ -487,6 +819,35 @@ export default function ReportesPage() {
 
                       <td className="border-b border-slate-100 px-3 py-2 text-right font-medium text-slate-800">
                         {formatCurrency(payload.totalSalesAmount)}
+                      </td>
+
+                      <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
+                        <div className="flex flex-wrap gap-1.5">
+                          {exportFormats.map((format) => {
+                            const exportKey = `${report.id}-${format}`;
+                            const isExporting = exportingReportKey === exportKey;
+
+                            return (
+                              <button
+                                key={format}
+                                type="button"
+                                onClick={() => handleExportReport(report, format)}
+                                disabled={exportingReportKey !== null}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                title={`Descargar reporte en formato ${getExportFormatLabel(
+                                  format
+                                )}`}
+                              >
+                                {isExporting ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Download className="h-3 w-3" />
+                                )}
+                                {getExportFormatLabel(format)}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </td>
 
                       <td className="border-b border-slate-100 px-3 py-2 text-slate-700">

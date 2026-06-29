@@ -4,18 +4,50 @@ const API_BASE_URL =
 
 const AUTH_TOKEN_KEY = "gestrest-token";
 
+type ApiErrorBody = {
+  message?: string;
+  error?: string;
+  validationErrors?: Record<string, string> | null;
+};
+
 function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(AUTH_TOKEN_KEY);
 }
 
-/**
- * Wrapper genérico de fetch:
- * - Prependa `${API_BASE_URL}` + `/api` si hace falta
- * - Agrega Authorization: Bearer <token> si existe
- * - Lanza error si !res.ok
- * - Devuelve T (JSON parseado) o undefined si 204
- */
+function buildFriendlyErrorMessage(status: number, rawBody: string): string {
+  if (!rawBody) {
+    return status >= 500
+      ? "Ocurrió un error inesperado en el servidor. Intenta nuevamente."
+      : "No se pudo completar la operación.";
+  }
+
+  try {
+    const parsed = JSON.parse(rawBody) as ApiErrorBody;
+
+    const validationMessages = parsed.validationErrors
+      ? Object.values(parsed.validationErrors).filter(Boolean)
+      : [];
+
+    if (validationMessages.length > 0) {
+      return validationMessages.join(" ");
+    }
+
+    if (parsed.message) return parsed.message;
+    if (parsed.error) return parsed.error;
+  } catch {
+    // Si no es JSON, usamos el texto plano si es corto y legible.
+  }
+
+  if (rawBody.length <= 180 && !rawBody.includes("timestamp")) {
+    return rawBody;
+  }
+
+  return status >= 500
+    ? "Ocurrió un error inesperado en el servidor. Intenta nuevamente."
+    : "No se pudo completar la operación. Revisa los datos ingresados.";
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
@@ -24,17 +56,14 @@ export async function apiFetch<T>(
 
   const headers = new Headers(options.headers ?? undefined);
 
-  // Si hay token, agregamos el Authorization
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  // Si mandas body y no seteaste Content-Type, lo asumimos JSON
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  // Construcción de URL final
   const url = path.startsWith("http")
     ? path
     : `${API_BASE_URL}${path.startsWith("/api") ? path : `/api${path}`}`;
@@ -42,15 +71,13 @@ export async function apiFetch<T>(
   const res = await fetch(url, {
     ...options,
     headers,
-    credentials: "include",
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Error API ${res.status}: ${text}`);
+    throw new Error(buildFriendlyErrorMessage(res.status, text));
   }
 
-  // Sin contenido (No Content)
   if (res.status === 204) {
     return undefined as T;
   }

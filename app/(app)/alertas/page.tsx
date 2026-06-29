@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useAuthContext } from "@/context/AuthContext";
 import type { AlertDTO } from "@/lib/backend-types";
+import { canAccessModule, ROUTE_PERMISSIONS } from "@/lib/permissions";
 import {
   getAlerts,
   getUnreadAlerts,
@@ -30,6 +31,11 @@ import {
 } from "@/lib/services";
 
 type AlertFilter = "active" | "unread" | "unresolved";
+
+type ResolutionAction = {
+  route: string;
+  label: string;
+};
 
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
@@ -133,9 +139,10 @@ function getAlertEntity(alert: AlertDTO) {
 
 export default function AlertasPage() {
   const router = useRouter();
-  const { hasRole } = useAuthContext();
+  const { user, hasRole } = useAuthContext();
 
   const canResolveAlerts = hasRole(["ADMIN", "MANAGER"]);
+  const isEmployee = user?.role === "EMPLOYEE";
 
   const [alerts, setAlerts] = useState<AlertDTO[]>([]);
   const [filter, setFilter] = useState<AlertFilter>("unresolved");
@@ -216,7 +223,22 @@ export default function AlertasPage() {
     ["critical", "high"].includes((alert.severity ?? "").toLowerCase())
   ).length;
 
-  const getResolutionRoute = (alert: AlertDTO) => {
+  const canAccessRoute = useCallback(
+    (route: string) => {
+      const baseRoute = route.split("?")[0];
+
+      const permission = ROUTE_PERMISSIONS.find(
+        (item) => item.href === baseRoute
+      );
+
+      if (!permission) return false;
+
+      return canAccessModule(user?.role, permission.roles);
+    },
+    [user?.role]
+  );
+
+  const getProposedResolutionRoute = (alert: AlertDTO) => {
     const text = [
       alert.alertTypeName,
       alert.title,
@@ -279,17 +301,50 @@ export default function AlertasPage() {
     return "/dashboard";
   };
 
-  const getResolutionLabel = (alert: AlertDTO) => {
-    const route = getResolutionRoute(alert);
+  const getResolutionLabelForRoute = (route: string) => {
+    if (route.startsWith("/insumos")) {
+      return isEmployee ? "Ver insumo" : "Atender en insumos";
+    }
 
-    if (route.startsWith("/insumos")) return "Atender en insumos";
     if (route.startsWith("/platillos")) return "Atender en platillos";
     if (route.startsWith("/predicciones")) return "Atender en predicciones";
     if (route.startsWith("/ventas")) return "Atender en ventas";
     if (route.startsWith("/proveedores")) return "Atender en proveedores";
     if (route.startsWith("/ordenes")) return "Atender en abastecimiento";
+    if (route.startsWith("/dashboard")) return "Ver dashboard";
 
     return "Atender alerta";
+  };
+
+  const getResolutionAction = (alert: AlertDTO): ResolutionAction | null => {
+    const proposedRoute = getProposedResolutionRoute(alert);
+
+    if (canAccessRoute(proposedRoute)) {
+      return {
+        route: proposedRoute,
+        label: getResolutionLabelForRoute(proposedRoute),
+      };
+    }
+
+    /*
+     * Caso CP075:
+     * EMPLOYEE no tiene acceso a Abastecimiento (/ordenes) ni Platillos
+     * según el menú lateral. Por eso no se deben mostrar acciones hacia esos
+     * módulos. Si la alerta es de producto/stock, se ofrece como alternativa
+     * segura "Ver insumo", porque Employee sí puede acceder a /insumos.
+     */
+    if (
+      proposedRoute.startsWith("/ordenes") &&
+      alert.productId &&
+      canAccessRoute(`/insumos?productId=${alert.productId}`)
+    ) {
+      return {
+        route: `/insumos?productId=${alert.productId}`,
+        label: isEmployee ? "Ver insumo" : "Atender en insumos",
+      };
+    }
+
+    return null;
   };
 
   const handleMarkAsRead = async (alert: AlertDTO) => {
@@ -342,7 +397,7 @@ export default function AlertasPage() {
     }
   };
 
-  const goToResolutionModule = async (alert: AlertDTO) => {
+  const goToResolutionModule = async (alert: AlertDTO, route: string) => {
     try {
       setActionLoading(`go-${alert.id}`);
 
@@ -353,7 +408,7 @@ export default function AlertasPage() {
       console.warn("No se pudo marcar la alerta como leída antes de redirigir", e);
     } finally {
       setActionLoading(null);
-      router.push(getResolutionRoute(alert));
+      router.push(route);
     }
   };
 
@@ -544,6 +599,8 @@ export default function AlertasPage() {
                 actionLoading === `resolve-${alert.id}` ||
                 actionLoading === `go-${alert.id}`;
 
+              const resolutionAction = getResolutionAction(alert);
+
               return (
                 <article
                   key={alert.id}
@@ -630,15 +687,23 @@ export default function AlertasPage() {
                         </button>
                       )}
 
-                      <button
-                        type="button"
-                        onClick={() => goToResolutionModule(alert)}
-                        disabled={isProcessing}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        {getResolutionLabel(alert)}
-                      </button>
+                      {resolutionAction ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            goToResolutionModule(alert, resolutionAction.route)
+                          }
+                          disabled={isProcessing}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          {resolutionAction.label}
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-500">
+                          Sin acción directa para tu rol
+                        </span>
+                      )}
 
                       {canResolveAlerts && alert.isResolved !== true && (
                         <button
